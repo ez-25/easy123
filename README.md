@@ -41,6 +41,7 @@ Swagger 문서: `http://127.0.0.1:8000/docs`
     "통합신청서정보": {
       "학생인적사항": {
         "학생이름": "홍길동",
+        "지역": "대구광역시",
         "학년": 3,
         "반": 1,
         "생년월일": "2015-05-20",
@@ -83,60 +84,49 @@ Swagger 문서: `http://127.0.0.1:8000/docs`
 
 ```json
 {
-  "message": "분석 및 추천 성공",
-  "received_data": {
-    "전체데이터": {
-      "통합신청서정보": {
-        "...": "요청 바디와 동일"
-      },
-      "관찰일지목록": [
-        {
-          "...": "요청 바디와 동일"
-        }
-      ]
-    }
-  },
-  "ai_analysis": {
+  "ai_분석정리_요약": {
     "이름": "홍길동",
-    "분석내용": "학생은 정서적 불안과 돌봄 공백이 동시에 관찰되며 학업 결손 신호가 지속되고 있습니다. 상담 및 정서 안정 지원과 함께 방과 후 돌봄 연계, 기초학력 보강이 병행되어야 합니다.",
+    "요약분석": "학생은 정서적 불안과 돌봄 공백이 동시에 관찰되며 학업 결손 신호가 지속되고 있습니다. 상담 및 정서 안정 지원과 함께 방과 후 돌봄 연계, 기초학력 보강이 병행되어야 합니다.",
     "핵심신호": ["정서 안정 지원 필요", "돌봄 공백", "기초 학력 미달"]
   },
-  "query_used_for_rag": "정서 안정 지원 필요, 돌봄 공백, 기초 학력 미달",
-  "recommendations": [
+  "ai_추천기관_제도": [
     {
-      "rank": 1,
-      "유형": "기관",
-      "이름": "마음성장 아동청소년 상담센터",
-      "지원대상": "정서 불안 및 행동 조절 어려움이 있는 초중학생",
-      "지원내용": "주 1회 전문 심리상담 및 부모 코칭 8회기 제공",
-      "신청절차": "학교 추천서 접수 후 초기면접 진행",
-      "필요서류": "통합신청서+보호자 동의서+학교의견서",
-      "문의처": "02-1111-2222",
-      "적합도": 92.41,
-      "RAG요약": "마음성장 아동청소년 상담센터은(는) 정서 불안 및 행동 조절 어려움이 있는 초중학생을 대상으로 주 1회 전문 심리상담 및 부모 코칭 8회기 제공을 제공합니다. 신청은 학교 추천서 접수 후 초기면접 진행 절차로 진행하며 통합신청서+보호자 동의서+학교의견서 준비가 필요합니다."
+      "category": "기관",
+      "suitability": 92,
+      "welfareType": "지역센터",
+      "servId": "ORG0005",
+      "servNm": "대구청소년성문화센터",
+      "region": "대구광역시 달서구",
+      "agency": "대구광역시 달서구",
+      "department": "",
+      "intrsThemaArray": ["청소년"],
+      "lifeArray": ["청소년"],
+      "srvPvsnNm": "상담/지원",
+      "sprtCycNm": "수시",
+      "servDgst": "대구광역시 달서구 앞산순환로 180",
+      "servDtlLink": "http://www.dgsay.net",
+      "inqNum": 0,
+      "contact": "053-653-7755",
+      "sourceDataset": "integrated_institution_data.csv"
     }
   ]
 }
 ```
 
-## 5) RAG 기초 검색 (Step 2)
+## 5) RAG 검색
 
-### 샘플 CSV
+### 데이터 소스
 
-- 루트 파일: `sample_institutions.csv`
-- 생성 스크립트: `scripts/create_sample_csv.py`
-
-필요하면 아래로 다시 생성할 수 있습니다.
-
-```bash
-python scripts/create_sample_csv.py
-```
+- `integrated_institution_data.csv`
+- `transformed_scholarships_detailed_dgst.csv`
+- `welfare_integrated_data.csv`
 
 ### 검색 함수
 
 - 구현 파일: `app/rag.py`
-- 함수: `search_relevant_institutions(query, top_k=3, csv_path=None)`
-- 방식: Gemini Embedding(`models/text-embedding-004`) + LangChain FAISS(인메모리)
+- 함수: `search_relevant_institutions(query, top_k=100, csv_path=None, context=None)`
+- 방식: 기본은 로컬 재랭킹 기반 검색이며, `USE_GEMINI_EMBEDDINGS=true`일 때 Gemini Embedding + FAISS를 함께 사용합니다.
+- 특징: 학생 `지역`, 관찰일지, 신청사유, 지원요청사항, 경제상황, Gemini 도메인 점수를 함께 반영해 적합도 순으로 최대 100건을 반환합니다.
 
 ### 단독 테스트
 
@@ -144,7 +134,7 @@ python scripts/create_sample_csv.py
 python test_rag_search.py
 ```
 
-환경 변수 `.env`에 `GEMINI_API_KEY`가 필요합니다.
+기본 모드(`USE_GEMINI_EMBEDDINGS=false`)에서는 Gemini Embedding 없이도 테스트할 수 있습니다.
 
 ## 6) Gemini 분석 연동 (Step 3)
 
@@ -155,7 +145,7 @@ python test_rag_search.py
 
 ## 7) 최종 조합 응답 (Step 4)
 
-- 흐름: 요청 수신 -> Gemini 분석(`핵심신호`) -> RAG 검색(top 3) -> 최종 JSON 조립
+- 흐름: 요청 수신 -> Gemini 분석(`핵심신호`) -> 다중 CSV RAG 검색(top 100) -> 최종 JSON 조립
 - 예외 처리:
   - Gemini 호출 실패: `502`
   - 핵심신호 비어있음: `422`

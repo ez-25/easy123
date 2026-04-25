@@ -209,6 +209,7 @@ def _build_compact_student_context(request_data: AnalyzeStudentRequest) -> str:
 
     return (
         f"학생이름: {personal.student_name}\n"
+        f"지역: {personal.region}\n"
         f"학년/반: {personal.grade}학년 {personal.class_number}반\n"
         f"가정환경: {info.home_environment_and_eligibility.student_basic_info}, "
         f"{info.home_environment_and_eligibility.family_status}\n"

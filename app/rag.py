@@ -108,7 +108,7 @@ AGE_KEYWORD_RULES: tuple[tuple[str, int, int], ...] = (
     ("고등학생", 16, 19),
     ("고등학교", 16, 19),
     ("대학생", 19, 29),
-    ("청소년", 9, 24),
+    ("청소년", 7, 24),
     ("청년", 19, 34),
 )
 DEFAULT_SCORE_THRESHOLD = 1.8

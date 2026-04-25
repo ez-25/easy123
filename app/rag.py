@@ -439,12 +439,31 @@ def _is_age_eligible(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
     return True
 
 
-def _passes_hard_filters(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
+def _is_age_eligible_relaxed(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
+    age = profile["age"]
+    if age is None:
+        return True
+
+    if _is_age_eligible(metadata, profile):
+        return True
+
+    doc_text = metadata["_search_text"]
+    if 7 <= age <= 12 and "청소년" in doc_text and not _contains_any(doc_text, {"고등학생", "중학생", "대학생", "청년"}):
+        return True
+    return False
+
+
+def _passes_hard_filters(
+    metadata: dict[str, Any],
+    profile: dict[str, Any],
+    relax_age: bool = False,
+) -> bool:
     if metadata.get("_is_school_outside_support") and not any(
         keyword in profile["difficulty_text"] for keyword in {"학교밖", "학업중단", "자퇴", "검정고시"}
     ):
         return False
-    return _is_region_eligible(metadata, profile) and _is_age_eligible(metadata, profile)
+    age_eligible = _is_age_eligible_relaxed(metadata, profile) if relax_age else _is_age_eligible(metadata, profile)
+    return _is_region_eligible(metadata, profile) and age_eligible
 
 
 def _field_overlap_score(query_terms: list[str], metadata: dict[str, Any]) -> float:
@@ -587,6 +606,7 @@ def _rank_documents(
     top_k: int,
     context: dict[str, Any] | None = None,
     domain_scores: dict[str, float] | None = None,
+    relax_age: bool = False,
 ) -> list[dict[str, Any]]:
     query_terms = _tokenize(query)
     profile = _build_student_profile(context)
@@ -596,7 +616,7 @@ def _rank_documents(
 
     for document in documents:
         metadata = document["metadata"]
-        if not _passes_hard_filters(metadata, profile):
+        if not _passes_hard_filters(metadata, profile, relax_age=relax_age):
             continue
 
         raw_score = _score_candidate(metadata, query_terms, profile, domain_scores)
@@ -666,12 +686,22 @@ def search_relevant_institutions(
     documents = _load_documents(csv_paths)
 
     if not settings.use_gemini_embeddings:
+        ranked = _rank_documents(
+            documents=documents,
+            query=query,
+            top_k=resolved_top_k,
+            context=context,
+            domain_scores=domain_scores,
+        )
+        if ranked:
+            return ranked
         return _rank_documents(
             documents=documents,
             query=query,
             top_k=resolved_top_k,
             context=context,
             domain_scores=domain_scores,
+            relax_age=True,
         )
 
     try:
@@ -681,18 +711,38 @@ def search_relevant_institutions(
         filtered_documents = [
             document for document in documents if document["metadata"].get("servId", "") in candidate_ids
         ]
-        return _rank_documents(
+        ranked = _rank_documents(
             documents=filtered_documents or documents,
             query=query,
             top_k=resolved_top_k,
             context=context,
             domain_scores=domain_scores,
         )
+        if ranked:
+            return ranked
+        return _rank_documents(
+            documents=filtered_documents or documents,
+            query=query,
+            top_k=resolved_top_k,
+            context=context,
+            domain_scores=domain_scores,
+            relax_age=True,
+        )
     except Exception:
+        ranked = _rank_documents(
+            documents=documents,
+            query=query,
+            top_k=resolved_top_k,
+            context=context,
+            domain_scores=domain_scores,
+        )
+        if ranked:
+            return ranked
         return _rank_documents(
             documents=documents,
             query=query,
             top_k=resolved_top_k,
             context=context,
             domain_scores=domain_scores,
+            relax_age=True,
         )

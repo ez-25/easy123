@@ -28,6 +28,15 @@ DOMAIN_ANALYSIS_INSTRUCTION = (
     "반드시 JSON만 반환하고 설명은 쓰지 마."
 )
 
+LOCAL_SIGNAL_RULES: dict[str, set[str]] = {
+    "학업 지원 필요": {"기초학력", "학습", "수업", "집중", "숙제", "학업", "참여 저조"},
+    "정서 안정 지원 필요": {"불안", "눈물", "우울", "감정", "정서", "분노", "위축"},
+    "또래관계 지원 필요": {"갈등", "말다툼", "친구", "또래", "사회성", "관계"},
+    "돌봄 공백 지원 필요": {"돌봄", "보호자 부재", "혼자", "방과 후", "귀가", "공백"},
+    "경제 지원 검토 필요": {"차상위", "수급", "교육비", "납부 지연", "저소득", "생계"},
+    "위기 개입 검토 필요": {"자해", "학대", "가출", "폭력", "긴급", "위기"},
+}
+
 
 def _is_rate_limit_error(error: Exception) -> bool:
     message = str(error).lower()
@@ -51,6 +60,79 @@ def _extract_keywords(text: str, limit: int = 3) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def _normalize_spaces(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _extract_local_signals(request_data: AnalyzeStudentRequest) -> list[str]:
+    info = request_data.all_data.integrated_application_info
+    difficulties = info.student_condition.student_difficulties
+    observation_text = " ".join(
+        f"{log.content} {log.special_notes}" for log in request_data.all_data.observation_logs
+    )
+    merged_text = _normalize_spaces(
+        " ".join(
+            [
+                info.support_request,
+                info.application_reason,
+                info.student_condition.student_status,
+                difficulties.academics,
+                difficulties.emotional_psychological,
+                difficulties.care_safety_health,
+                difficulties.economy_life,
+                difficulties.etc,
+                observation_text,
+                info.home_environment_and_eligibility.student_basic_info,
+                info.home_environment_and_eligibility.basic_living_security_status,
+                info.home_environment_and_eligibility.family_status,
+            ]
+        )
+    )
+
+    signals: list[str] = []
+    for signal, keywords in LOCAL_SIGNAL_RULES.items():
+        if any(keyword in merged_text for keyword in keywords):
+            signals.append(signal)
+    return signals[:5]
+
+
+def _build_local_summary(request_data: AnalyzeStudentRequest, local_signals: list[str]) -> str:
+    info = request_data.all_data.integrated_application_info
+    difficulties = info.student_condition.student_difficulties
+    key_points: list[str] = []
+
+    if any("정서" in signal or "위기" in signal for signal in local_signals):
+        key_points.append("정서적 불안과 행동 조절 어려움이 반복 관찰됩니다")
+    if any("학업" in signal for signal in local_signals):
+        key_points.append("학업 결손과 수업 참여 저하가 함께 나타납니다")
+    if any("돌봄" in signal for signal in local_signals):
+        key_points.append("방과 후 돌봄 공백으로 학교 밖 시간의 보호 체계가 약합니다")
+    if any("경제" in signal for signal in local_signals):
+        key_points.append("가정의 경제 부담으로 교육비 지원 연계 필요성이 확인됩니다")
+
+    if not key_points:
+        key_points.append(
+            f"{difficulties.academics}와 {difficulties.emotional_psychological} 문제가 함께 관찰됩니다"
+        )
+
+    support_sentence = (
+        "상담, 학습, 돌봄, 복지 자원을 함께 묶는 통합 지원이 우선적으로 필요합니다."
+    )
+    return ". ".join(part.rstrip(".") for part in key_points[:2]) + ". " + support_sentence
+
+
+def _merge_key_signals(primary: list[str], secondary: list[str], limit: int = 5) -> list[str]:
+    merged: list[str] = []
+    for source in (primary, secondary):
+        for signal in source:
+            cleaned = _normalize_spaces(signal)
+            if cleaned and cleaned not in merged:
+                merged.append(cleaned)
+            if len(merged) >= limit:
+                return merged
+    return merged
 
 
 def _extract_json_object(raw_text: str) -> dict:
@@ -236,6 +318,20 @@ def _default_domain_scores() -> dict[str, float]:
     }
 
 
+def _local_domain_scores_from_text(text: str) -> dict[str, float]:
+    normalized = _normalize_spaces(text)
+    return {
+        "학업": 0.9 if any(keyword in normalized for keyword in {"기초학력", "학습", "수업", "집중"}) else 0.2,
+        "정서_심리": 0.95 if any(keyword in normalized for keyword in {"불안", "눈물", "정서", "감정", "우울"}) else 0.2,
+        "사회성": 0.75 if any(keyword in normalized for keyword in {"갈등", "친구", "말다툼", "사회성"}) else 0.15,
+        "돌봄": 0.9 if any(keyword in normalized for keyword in {"돌봄", "보호자 부재", "방과 후", "공백"}) else 0.15,
+        "경제": 0.8 if any(keyword in normalized for keyword in {"차상위", "수급", "교육비", "납부 지연"}) else 0.1,
+        "위기": 0.8 if any(keyword in normalized for keyword in {"긴급", "자해", "학대", "폭력", "가출"}) else 0.05,
+        "장애_특수": 0.7 if any(keyword in normalized for keyword in {"특수교육", "발달장애", "장애"}) else 0.0,
+        "분석근거": normalized[:120],
+    }
+
+
 def analyze_observation_domains(
     observation_logs: list,
     student_context: str = "",
@@ -245,7 +341,16 @@ def analyze_observation_domains(
     Gemini 호출 실패 시 기본값을 반환하여 서비스 중단을 방지한다.
     """
     if not settings.gemini_api_key:
-        return _default_domain_scores()
+        heuristic_text = " ".join(
+            [
+                student_context,
+                " ".join(
+                    f"{log.content} {log.special_notes}"
+                    for log in observation_logs[:5]
+                ),
+            ]
+        )
+        return _local_domain_scores_from_text(heuristic_text)
 
     log_text = "\n".join(
         f"[{log.date} {log.place}] {log.content} / 특이사항: {log.special_notes}"
@@ -294,12 +399,24 @@ def analyze_observation_domains(
 
     except Exception:
         # Gemini 실패해도 서비스 중단 없이 기본값으로 계속
-        return _default_domain_scores()
+        heuristic_text = " ".join(
+            [
+                student_context,
+                " ".join(
+                    f"{log.content} {log.special_notes}"
+                    for log in observation_logs[:5]
+                ),
+            ]
+        )
+        return _local_domain_scores_from_text(heuristic_text)
 
 
 def analyze_student_data(request_data: AnalyzeStudentRequest) -> GeminiAnalysisResult:
+    local_signals = _extract_local_signals(request_data)
+    local_summary = _build_local_summary(request_data, local_signals)
+
     if not settings.gemini_api_key:
-        raise ValueError("GEMINI_API_KEY is not set in .env")
+        return _build_local_fallback_analysis(request_data, None, [])
     compact_context = _build_compact_student_context(request_data)
     prompt = (
         f"{SYSTEM_INSTRUCTION}\n\n"
@@ -342,6 +459,15 @@ def analyze_student_data(request_data: AnalyzeStudentRequest) -> GeminiAnalysisR
                         parsed,
                         fallback_name=request_data.all_data.integrated_application_info.student_personal_info.student_name,
                     )
+                    merged_signals = _merge_key_signals(normalized["핵심신호"], local_signals)
+                    normalized["핵심신호"] = merged_signals
+                    if not normalized["분석내용"]:
+                        normalized["분석내용"] = local_summary
+                    elif local_signals:
+                        normalized["분석내용"] = (
+                            f"{normalized['분석내용']} "
+                            f"우선 지원 축은 {', '.join(merged_signals[:3])}입니다."
+                        ).strip()
                     return GeminiAnalysisResult.model_validate(normalized)
                 except (ValueError, ValidationError) as error:
                     last_error = error
@@ -382,12 +508,11 @@ def _build_local_fallback_analysis(
     info = request_data.all_data.integrated_application_info
     name = info.student_personal_info.student_name
     difficulties = info.student_condition.student_difficulties
-
-    key_signals = [
-        "기초 학력 미달",
-        "정서 불안",
-        "돌봄 공백",
-    ]
+    local_signals = _extract_local_signals(request_data)
+    key_signals = _merge_key_signals(
+        local_signals,
+        ["학업 지원 필요", "정서 안정 지원 필요", "돌봄 공백 지원 필요"],
+    )
     observation_keywords: list[str] = []
     for log in request_data.all_data.observation_logs:
         observation_keywords.extend(_extract_keywords(log.special_notes, limit=2))
@@ -397,10 +522,7 @@ def _build_local_fallback_analysis(
         if keyword not in key_signals and len(key_signals) < 5:
             key_signals.append(keyword)
 
-    analysis = (
-        f"{name} 학생은 {difficulties.academics} 상태이며, {difficulties.emotional_psychological}. "
-        f"또한 {difficulties.care_safety_health} 상황으로 확인되어 학습·정서·돌봄 영역의 통합 지원 연계가 필요합니다."
-    )
+    analysis = _build_local_summary(request_data, key_signals)
 
     return GeminiAnalysisResult(
         이름=name,

@@ -126,7 +126,8 @@ Swagger 문서: `http://127.0.0.1:8000/docs`
 - 구현 파일: `app/rag.py`
 - 함수: `search_relevant_institutions(query, top_k=100, csv_path=None, context=None)`
 - 방식: 기본은 로컬 재랭킹 기반 검색이며, `USE_GEMINI_EMBEDDINGS=true`일 때 Gemini Embedding + FAISS를 함께 사용합니다.
-- 특징: 학생 `지역`, 관찰일지, 신청사유, 지원요청사항, 경제상황, Gemini 도메인 점수를 함께 반영해 적합도 순으로 최대 100건을 반환합니다.
+- 특징: 학생 `지역`, `생년월일`, 관찰일지, 신청사유, 지원요청사항, 경제상황, Gemini 도메인 점수를 함께 반영해 적합도 순으로 최대 100건을 반환합니다.
+- 지역/연령 불일치 항목은 감점이 아니라 후보 단계에서 제외합니다. 따라서 조건에 맞는 제도만 남으면 100개보다 적게 반환될 수 있습니다.
 
 ### 단독 테스트
 
@@ -135,6 +136,7 @@ python test_rag_search.py
 ```
 
 기본 모드(`USE_GEMINI_EMBEDDINGS=false`)에서는 Gemini Embedding 없이도 테스트할 수 있습니다.
+`GEMINI_API_KEY`가 없어도 로컬 요약/관찰일지 분석 fallback으로 API가 동작합니다.
 
 ## 6) Gemini 분석 연동 (Step 3)
 

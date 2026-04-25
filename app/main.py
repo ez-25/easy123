@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware  # Vercel 배포 필수 추가
 import ast
+from datetime import date, datetime
 
 from app.config import settings
 from app.gemini_analyzer import analyze_student_data, analyze_observation_domains
@@ -35,6 +36,15 @@ def _parse_array_field(value: str) -> list[str]:
     except Exception:
         pass
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _calculate_age(birth_date: str) -> int | None:
+    try:
+        parsed = datetime.strptime(birth_date, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    today = date.today()
+    return today.year - parsed.year - ((today.month, today.day) < (parsed.month, parsed.day))
 
 
 def _build_rag_context(
@@ -73,6 +83,8 @@ def _build_rag_context(
     return {
         "student_grade": personal.grade,
         "student_region": personal.region,
+        "student_birth_date": personal.birth_date,
+        "student_age": _calculate_age(personal.birth_date),
         "student_text": " ".join(part for part in full_text_parts if part).strip(),
         "support_request": info.support_request,
         "application_reason": info.application_reason,
@@ -92,6 +104,7 @@ def analyze_student(request: AnalyzeStudentRequest) -> AnalyzeStudentResponse:
         analysis = analyze_student_data(request)
         student_context = (
             f"지역: {request.all_data.integrated_application_info.student_personal_info.region}\n"
+            f"생년월일: {request.all_data.integrated_application_info.student_personal_info.birth_date}\n"
             f"학년: {request.all_data.integrated_application_info.student_personal_info.grade}\n"
             f"지원요청: {request.all_data.integrated_application_info.support_request}\n"
             f"핵심신호: {', '.join(analysis.key_signals)}"

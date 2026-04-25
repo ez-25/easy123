@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,13 +25,12 @@ NORMALIZED_COLUMNS = [
     "contact",
     "sourceDataset",
 ]
-FIELD_WEIGHTS: dict[str, float] = {
+QUERY_FIELD_WEIGHTS: dict[str, float] = {
     "servNm": 2.8,
-    "lifeArray": 1.9,
-    "servDgst": 2.4,
-    "srvPvsnNm": 1.0,
-    "intrsThemaArray": 0.8,
-    "category": 0.5,
+    "lifeArray": 1.3,
+    "servDgst": 2.9,
+    "srvPvsnNm": 1.2,
+    "intrsThemaArray": 1.0,
     "region": 1.1,
 }
 KOREAN_STOPWORDS = {
@@ -56,114 +56,8 @@ KOREAN_STOPWORDS = {
     "신청",
     "신청서",
     "정보",
-}
-DOMAIN_KEYWORDS: dict[str, set[str]] = {
-    "academic": {
-        "학업",
-        "학습",
-        "기초학력",
-        "기초",
-        "수학",
-        "국어",
-        "학습부진",
-        "숙제",
-        "집중",
-        "수업",
-        "무기력",
-        "교육비",
-        "학비",
-        "멘토링",
-    },
-    "counseling": {
-        "정서",
-        "심리",
-        "상담",
-        "불안",
-        "우울",
-        "위축",
-        "분노",
-        "스트레스",
-        "wee",
-        "위클래스",
-        "정신건강",
-        "치유",
-    },
-    "social": {
-        "또래",
-        "갈등",
-        "사회성",
-        "충동",
-        "관계",
-        "폭력",
-        "친구",
-        "집단",
-        "대인관계",
-    },
-    "care": {
-        "돌봄",
-        "방과후",
-        "방과 후",
-        "아이돌봄",
-        "보호",
-        "귀가",
-        "맞벌이",
-        "조손",
-        "지역아동센터",
-        "청소년방과후아카데미",
-    },
-    "economic": {
-        "기초생활수급자",
-        "수급자",
-        "차상위",
-        "저소득",
-        "교육비",
-        "생계",
-        "급여",
-        "장학금",
-        "생활비",
-        "한부모",
-    },
-    "risk": {
-        "학대",
-        "자해",
-        "가정폭력",
-        "성폭력",
-        "가출",
-        "긴급",
-        "위기",
-        "보호시설",
-    },
-}
-SECONDARY_ONLY_KEYWORDS = {
-    "고등학생",
-    "고등학교",
-    "고1",
-    "고2",
-    "고3",
-    "중학생",
-    "중학교",
-    "대학생",
-}
-ELEMENTARY_HINT_KEYWORDS = {"초등", "초중", "아동", "청소년", "학생"}
-NATIONWIDE_KEYWORDS = {"전국", "전국단위", "전국공통", "중앙부처", "중앙", "전국 공통"}
-LOW_INCOME_KEYWORDS = {
-    "기초생활수급자",
-    "수급자",
-    "차상위",
-    "한부모",
-    "저소득",
-    "복지급여",
-    "중위소득",
-}
-LOCAL_CENTER_KEYWORDS = {
-    "센터",
-    "수련관",
-    "복지관",
-    "상담복지센터",
-    "정신건강복지센터",
-    "가족센터",
-    "학교밖청소년지원센터",
-    "청소년상담복지센터",
+    "내용",
+    "사항",
 }
 REGION_ALIASES: dict[str, tuple[str, ...]] = {
     "서울": ("서울", "서울특별시", "서울시"),
@@ -184,6 +78,40 @@ REGION_ALIASES: dict[str, tuple[str, ...]] = {
     "경남": ("경남", "경상남도"),
     "제주": ("제주", "제주도", "제주특별자치도"),
 }
+REGION_PATTERN = re.compile(r"[가-힣]+(?:특별시|광역시|특별자치시|특별자치도|도|시|군|구)")
+LOCAL_SERVICE_KEYWORDS = {
+    "센터",
+    "복지관",
+    "상담복지센터",
+    "정신건강복지센터",
+    "청소년상담복지센터",
+    "학교밖청소년지원센터",
+    "수련관",
+}
+NATIONWIDE_KEYWORDS = {"전국", "전국단위", "전국 공통", "중앙부처", "전국 누구나", "전국민"}
+SERVICE_TAG_KEYWORDS: dict[str, set[str]] = {
+    "academic": {"학업", "학습", "기초학력", "교육", "학비", "교육비", "멘토링", "학교"},
+    "counseling": {"상담", "심리", "정서", "정신건강", "wee", "위클래스", "치유"},
+    "social": {"또래", "사회성", "관계", "갈등", "대인관계", "집단상담"},
+    "care": {"돌봄", "방과후", "방과 후", "아이돌봄", "보호", "지역아동센터", "아카데미"},
+    "economic": {"장학금", "저소득", "차상위", "수급", "생활비", "급여", "바우처"},
+    "risk": {"위기", "긴급", "학대", "폭력", "보호시설", "가출"},
+}
+AGE_KEYWORD_RULES: tuple[tuple[str, int, int], ...] = (
+    ("영유아", 0, 6),
+    ("유아", 0, 6),
+    ("아동", 6, 12),
+    ("초등", 7, 13),
+    ("초등학생", 7, 13),
+    ("중학생", 13, 16),
+    ("중학교", 13, 16),
+    ("고등학생", 16, 19),
+    ("고등학교", 16, 19),
+    ("대학생", 19, 29),
+    ("청소년", 9, 24),
+    ("청년", 19, 34),
+)
+DEFAULT_SCORE_THRESHOLD = 1.8
 
 
 def _project_root() -> Path:
@@ -201,12 +129,7 @@ def _parse_csv_list(value: str | None) -> list[Path]:
     raw = (value or "").strip()
     if not raw:
         return []
-    paths: list[Path] = []
-    for item in raw.split(","):
-        cleaned = item.strip()
-        if cleaned:
-            paths.append(_resolve_path(cleaned))
-    return paths
+    return [_resolve_path(item.strip()) for item in raw.split(",") if item.strip()]
 
 
 def _safe_int(value: str) -> int:
@@ -216,6 +139,21 @@ def _safe_int(value: str) -> int:
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _tokenize(text: str) -> list[str]:
+    terms = re.findall(r"[가-힣A-Za-z0-9]{2,}", _normalize_text(text).lower())
+    deduped: list[str] = []
+    for term in terms:
+        if term in KOREAN_STOPWORDS:
+            continue
+        if term not in deduped:
+            deduped.append(term)
+    return deduped
+
+
+def _contains_any(text: str, keywords: set[str]) -> bool:
+    return any(keyword in text for keyword in keywords)
 
 
 def _normalize_region_name(region: str) -> str:
@@ -232,31 +170,100 @@ def _extract_region_tokens(region: str) -> list[str]:
     cleaned = _normalize_text(region)
     if not cleaned:
         return []
-    tokens = re.findall(r"[가-힣A-Za-z0-9]{2,}", cleaned)
-    unique: list[str] = []
+    tokens = list(dict.fromkeys(REGION_PATTERN.findall(cleaned)))
+    canonical = _normalize_region_name(cleaned)
+    result: list[str] = []
+    if canonical:
+        result.append(canonical)
+    for token in tokens:
+        if token not in result:
+            result.append(token)
+    return result
+
+
+def _extract_declared_regions(text: str) -> list[str]:
+    cleaned = _normalize_text(text)
+    if not cleaned:
+        return []
+    result: list[str] = []
     canonical = _normalize_region_name(cleaned)
     if canonical:
-        unique.append(canonical)
-    for token in tokens:
-        if token not in unique:
-            unique.append(token)
-    return unique
+        result.append(canonical)
+    for match in REGION_PATTERN.findall(cleaned):
+        if match not in result:
+            result.append(match)
+    return result
 
 
-def _has_explicit_local_requirement(text: str) -> bool:
-    normalized = _normalize_text(text)
-    if not normalized:
-        return False
-    return bool(re.search(r"[가-힣]+(특별시|광역시|특별자치시|특별자치도|도|시|군|구)", normalized))
+def _parse_birth_date(value: str) -> date | None:
+    cleaned = _normalize_text(value)
+    if not cleaned:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(cleaned, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _calculate_age(birth_date: str) -> int | None:
+    parsed = _parse_birth_date(birth_date)
+    if parsed is None:
+        return None
+    today = date.today()
+    return today.year - parsed.year - ((today.month, today.day) < (parsed.month, parsed.day))
+
+
+def _infer_age_bounds(text: str) -> tuple[int | None, int | None]:
+    cleaned = _normalize_text(text)
+    if not cleaned:
+        return None, None
+
+    min_age: int | None = None
+    max_age: int | None = None
+
+    for low, high in re.findall(r"만?\s*(\d{1,2})\s*세\s*(?:~|-|부터)\s*만?\s*(\d{1,2})\s*세", cleaned):
+        low_value = int(low)
+        high_value = int(high)
+        min_age = low_value if min_age is None else max(min_age, low_value)
+        max_age = high_value if max_age is None else min(max_age, high_value)
+
+    for value, operator in re.findall(r"만?\s*(\d{1,2})\s*세\s*(이하|미만|이상|초과)", cleaned):
+        age_value = int(value)
+        if operator == "이하":
+            max_age = age_value if max_age is None else min(max_age, age_value)
+        elif operator == "미만":
+            max_age = age_value - 1 if max_age is None else min(max_age, age_value - 1)
+        elif operator == "이상":
+            min_age = age_value if min_age is None else max(min_age, age_value)
+        elif operator == "초과":
+            min_age = age_value + 1 if min_age is None else max(min_age, age_value + 1)
+
+    for keyword, low_value, high_value in AGE_KEYWORD_RULES:
+        if keyword in cleaned:
+            min_age = low_value if min_age is None else max(min_age, low_value)
+            max_age = high_value if max_age is None else min(max_age, high_value)
+
+    return min_age, max_age
+
+
+def _extract_service_tags(text: str) -> set[str]:
+    lowered = _normalize_text(text).lower()
+    tags: set[str] = set()
+    for tag, keywords in SERVICE_TAG_KEYWORDS.items():
+        if any(keyword in lowered for keyword in keywords):
+            tags.add(tag)
+    return tags
 
 
 def _build_searchable_text(metadata: dict[str, str]) -> str:
     return " ".join(_normalize_text(metadata.get(column, "")) for column in NORMALIZED_COLUMNS).lower()
 
 
-def _normalize_row(row: dict[str, str], source_dataset: str) -> dict[str, str]:
+def _normalize_row(row: dict[str, str], source_dataset: str) -> dict[str, Any]:
     region = _normalize_text(row.get("region", "") or row.get("agency", "") or row.get("department", ""))
-    metadata = {
+    metadata: dict[str, Any] = {
         "category": _normalize_text(row.get("category", "")),
         "welfareType": _normalize_text(row.get("welfareType", "")),
         "servId": _normalize_text(row.get("servId", "")),
@@ -274,7 +281,32 @@ def _normalize_row(row: dict[str, str], source_dataset: str) -> dict[str, str]:
         "contact": _normalize_text(row.get("contact", "")),
         "sourceDataset": source_dataset,
     }
+    combined_text = " ".join(
+        [
+            metadata["servNm"],
+            metadata["region"],
+            metadata["agency"],
+            metadata["department"],
+            metadata["intrsThemaArray"],
+            metadata["lifeArray"],
+            metadata["srvPvsnNm"],
+            metadata["servDgst"],
+        ]
+    )
     metadata["_search_text"] = _build_searchable_text(metadata)
+    metadata["_region_tokens"] = _extract_declared_regions(combined_text)
+    metadata["_age_min"], metadata["_age_max"] = _infer_age_bounds(combined_text)
+    metadata["_tags"] = _extract_service_tags(combined_text)
+    metadata["_is_local_institution"] = source_dataset == "integrated_institution_data.csv"
+    metadata["_is_nationwide"] = _contains_any(combined_text, NATIONWIDE_KEYWORDS) and not metadata["_region_tokens"]
+    metadata["_requires_local_region"] = metadata["_is_local_institution"] or (
+        bool(metadata["_region_tokens"]) and not metadata["_is_nationwide"]
+    )
+    metadata["_is_scholarship"] = "장학금" in combined_text
+    metadata["_is_school_outside_support"] = "학교밖" in combined_text
+    metadata["_is_direct_service"] = any(
+        keyword in combined_text for keyword in {"상담", "서비스", "프로그램", "돌봄", "보호", "연계", "센터"}
+    ) and "장학금" not in combined_text
     return metadata
 
 
@@ -297,9 +329,9 @@ def _load_documents(csv_paths: list[Path]) -> list[dict[str, Any]]:
             for row in reader:
                 metadata = _normalize_row(row, source_dataset=csv_path.name)
                 dedupe_key = (
+                    metadata["sourceDataset"],
                     metadata["servId"],
                     metadata["servNm"],
-                    metadata["sourceDataset"],
                 )
                 if dedupe_key in seen_keys:
                     continue
@@ -311,239 +343,242 @@ def _load_documents(csv_paths: list[Path]) -> list[dict[str, Any]]:
     return documents
 
 
-def _tokenize_query(query: str) -> list[str]:
-    raw_terms = re.findall(r"[가-힣A-Za-z0-9]{2,}", query.lower())
-    deduped: list[str] = []
-    for term in raw_terms:
-        if term in KOREAN_STOPWORDS:
-            continue
-        if term not in deduped:
-            deduped.append(term)
-    return deduped
+def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
+    context = context or {}
+    student_text = _normalize_text(str(context.get("student_text", "")))
+    support_request = _normalize_text(str(context.get("support_request", "")))
+    observation_text = _normalize_text(str(context.get("observation_text", "")))
+    region = _normalize_text(str(context.get("student_region", "")))
+    birth_date = _normalize_text(str(context.get("student_birth_date", "")))
+    age = _calculate_age(birth_date)
+
+    difficulty_text = " ".join(
+        [
+            student_text,
+            support_request,
+            observation_text,
+            _normalize_text(str(context.get("application_reason", ""))),
+            _normalize_text(str(context.get("economy_life", ""))),
+            _normalize_text(str(context.get("basic_living_security_status", ""))),
+        ]
+    ).lower()
+
+    need_tags = _extract_service_tags(difficulty_text)
+    if "교우" in difficulty_text or "친구" in difficulty_text:
+        need_tags.add("social")
+    if "교육비" in difficulty_text or "차상위" in difficulty_text or "수급" in difficulty_text:
+        need_tags.add("economic")
+
+    observation_terms = _tokenize(observation_text)
+    summary_terms = _tokenize(student_text + " " + support_request)
+
+    return {
+        "age": age,
+        "region": region,
+        "region_tokens": _extract_region_tokens(region),
+        "canonical_region": _normalize_region_name(region),
+        "need_tags": need_tags,
+        "priority_tags": _extract_service_tags(f"{support_request} {observation_text}".lower()),
+        "observation_terms": observation_terms,
+        "summary_terms": summary_terms,
+        "student_grade": int(context.get("student_grade", 0) or 0),
+        "difficulty_text": difficulty_text,
+    }
 
 
-def _contains_any(text: str, keywords: set[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
-
-
-def _score_text_match(query_terms: list[str], text: str) -> float:
-    if not query_terms:
-        return 0.0
-    matches = sum(1 for term in query_terms if term in text)
-    return matches / len(query_terms)
-
-
-def _weighted_row_match_score(query_terms: list[str], metadata: dict[str, str]) -> float:
-    if not query_terms:
-        return 0.0
-
-    weighted_score = 0.0
-    total_weight = 0.0
-
-    for field, weight in FIELD_WEIGHTS.items():
-        field_text = metadata.get(field, "").lower()
-        total_weight += weight
-        if not field_text:
-            continue
-        hits = sum(1 for term in query_terms if term in field_text)
-        weighted_score += (hits / len(query_terms)) * weight
-
-    return weighted_score / total_weight if total_weight else 0.0
-
-
-def _domain_profile_scores(text: str) -> dict[str, float]:
-    scores: dict[str, float] = {}
-    for domain, keywords in DOMAIN_KEYWORDS.items():
-        hits = sum(1 for keyword in keywords if keyword in text)
-        scores[domain] = min(1.0, hits / 3)
-    return scores
-
-
-def _score_region_alignment(metadata: dict[str, str], student_region: str) -> float:
+def _is_region_eligible(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
+    student_region = profile["region"]
+    student_tokens = profile["region_tokens"]
+    canonical_region = profile["canonical_region"]
     if not student_region:
-        return 0.0
+        return True
 
-    doc_region_text = " ".join(
+    doc_regions = metadata.get("_region_tokens", [])
+    doc_text = " ".join(
         [
             metadata.get("region", ""),
             metadata.get("agency", ""),
             metadata.get("department", ""),
             metadata.get("servDgst", ""),
-            metadata.get("lifeArray", ""),
         ]
     )
-    doc_region_text = _normalize_text(doc_region_text)
-    if not doc_region_text:
-        return 0.0
 
-    student_region_tokens = _extract_region_tokens(student_region)
-    if not student_region_tokens:
-        return 0.0
+    if metadata.get("_is_nationwide"):
+        return True
 
-    canonical_student_region = _normalize_region_name(student_region)
-    canonical_doc_region = _normalize_region_name(doc_region_text)
+    if metadata.get("_is_local_institution"):
+        if canonical_region and any(canonical_region == _normalize_region_name(token) for token in doc_regions):
+            return True
+        return any(token in doc_text for token in student_tokens if token)
 
-    exact_hits = sum(1 for token in student_region_tokens if token and token in doc_region_text)
-    if canonical_student_region and canonical_student_region == canonical_doc_region:
-        if exact_hits >= 2:
-            return 0.24
-        return 0.18
+    if not metadata.get("_requires_local_region"):
+        return True
 
-    if canonical_student_region and canonical_student_region in doc_region_text:
-        return 0.12
-
-    if exact_hits >= 2:
-        return 0.16
-    if exact_hits == 1:
-        return 0.08
-
-    if _has_explicit_local_requirement(doc_region_text):
-        if _contains_any(metadata.get("servNm", ""), LOCAL_CENTER_KEYWORDS):
-            return -0.45
-        if "장학금" in metadata.get("srvPvsnNm", ""):
-            return -0.55
-        return -0.35
-
-    if _contains_any(doc_region_text, NATIONWIDE_KEYWORDS):
-        return 0.06
-
-    if canonical_student_region and canonical_doc_region and canonical_student_region != canonical_doc_region:
-        if _contains_any(metadata.get("servNm", ""), LOCAL_CENTER_KEYWORDS):
-            return -0.18
-        if "장학금/지역연고" in metadata.get("srvPvsnNm", ""):
-            return -0.22
-        return -0.08
-
-    return 0.0
+    if canonical_region and any(canonical_region == _normalize_region_name(token) for token in doc_regions):
+        return True
+    return any(token in doc_text for token in student_tokens if token)
 
 
-def _score_context_alignment(
-    metadata: dict[str, str],
-    context: dict[str, Any] | None,
-    domain_scores: dict[str, float] | None = None,
-) -> float:
-    if not context:
-        return 0.0
+def _is_age_eligible(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
+    age = profile["age"]
+    if age is None:
+        return True
+
+    min_age = metadata.get("_age_min")
+    max_age = metadata.get("_age_max")
+    if min_age is not None and age < min_age:
+        return False
+    if max_age is not None and age > max_age:
+        return False
 
     doc_text = metadata["_search_text"]
-    student_text = _normalize_text(str(context.get("student_text", ""))).lower()
-    support_request = _normalize_text(str(context.get("support_request", ""))).lower()
-    observation_text = _normalize_text(str(context.get("observation_text", ""))).lower()
-    application_reason = _normalize_text(str(context.get("application_reason", ""))).lower()
-    economy_text = _normalize_text(
-        " ".join(
-            [
-                str(context.get("basic_living_security_status", "")),
-                str(context.get("student_basic_info", "")),
-                str(context.get("economy_life", "")),
-                str(context.get("family_status", "")),
-            ]
-        )
-    ).lower()
+    if age >= 25 and _contains_any(doc_text, {"초등학생", "중학생", "고등학생", "초중고"}):
+        return False
+    if age <= 12 and _contains_any(doc_text, {"대학생", "청년"}):
+        return False
+    return True
+
+
+def _passes_hard_filters(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
+    if metadata.get("_is_school_outside_support") and not any(
+        keyword in profile["difficulty_text"] for keyword in {"학교밖", "학업중단", "자퇴", "검정고시"}
+    ):
+        return False
+    return _is_region_eligible(metadata, profile) and _is_age_eligible(metadata, profile)
+
+
+def _field_overlap_score(query_terms: list[str], metadata: dict[str, Any]) -> float:
+    if not query_terms:
+        return 0.0
 
     score = 0.0
-
-    student_domains = _domain_profile_scores(student_text)
-    doc_domains = _domain_profile_scores(doc_text)
-    for domain, student_strength in student_domains.items():
-        if student_strength <= 0:
+    total_weight = 0.0
+    for field, weight in QUERY_FIELD_WEIGHTS.items():
+        field_text = metadata.get(field, "").lower()
+        total_weight += weight
+        if not field_text:
             continue
-        score += student_strength * doc_domains.get(domain, 0.0) * 0.12
+        hit_count = sum(1 for term in query_terms if term in field_text)
+        score += (hit_count / len(query_terms)) * weight
+    return score / total_weight if total_weight else 0.0
 
-    support_terms = _tokenize_query(support_request)
-    if support_terms:
-        score += _score_text_match(support_terms, doc_text) * 0.26
 
-    observation_terms = _tokenize_query(observation_text)
-    if observation_terms:
-        score += _score_text_match(observation_terms, doc_text) * 0.20
+def _score_candidate(
+    metadata: dict[str, Any],
+    query_terms: list[str],
+    profile: dict[str, Any],
+    domain_scores: dict[str, float] | None,
+) -> float:
+    doc_text = metadata["_search_text"]
+    raw_score = 0.0
 
-    reason_terms = _tokenize_query(application_reason)
-    if reason_terms:
-        score += _score_text_match(reason_terms, doc_text) * 0.08
+    raw_score += _field_overlap_score(query_terms, metadata) * 2.7
 
-    if _contains_any(student_text, {"차상위", "수급", "저소득", "교육비", "납부 지연"}) and _contains_any(
-        doc_text,
-        LOW_INCOME_KEYWORDS,
-    ):
-        score += 0.12
+    if profile["summary_terms"]:
+        summary_hits = sum(1 for term in profile["summary_terms"] if term in doc_text)
+        raw_score += (summary_hits / len(profile["summary_terms"])) * 2.2
 
-    if not _contains_any(student_text, {"차상위", "수급", "저소득", "한부모"}) and _contains_any(
-        doc_text,
-        LOW_INCOME_KEYWORDS,
-    ):
-        score -= 0.10
+    if profile["observation_terms"]:
+        observation_hits = sum(1 for term in profile["observation_terms"] if term in doc_text)
+        raw_score += (observation_hits / len(profile["observation_terms"])) * 3.0
 
-    grade = int(context.get("student_grade", 0) or 0)
-    if grade:
-        if grade <= 6 and _contains_any(doc_text, SECONDARY_ONLY_KEYWORDS):
-            score -= 0.18
-        if grade <= 6 and _contains_any(doc_text, ELEMENTARY_HINT_KEYWORDS):
-            score += 0.04
+    need_tags = profile["need_tags"]
+    priority_tags = profile["priority_tags"] or need_tags
+    doc_tags = metadata["_tags"]
+    shared_tags = need_tags & doc_tags
+    raw_score += len(shared_tags) * 1.2
+    raw_score += len(priority_tags & doc_tags) * 1.6
 
-    student_region = str(context.get("student_region", "")).strip()
-    score += _score_region_alignment(metadata, student_region)
+    if "counseling" in need_tags and "counseling" in doc_tags:
+        raw_score += 1.0
+    if "care" in need_tags and "care" in doc_tags:
+        raw_score += 1.0
+    if "academic" in need_tags and "academic" in doc_tags:
+        raw_score += 0.9
+    if "economic" in need_tags and "economic" in doc_tags:
+        raw_score += 0.7
 
-    support_needs_counseling = _contains_any(
-        f"{student_text} {support_request} {observation_text}",
-        {"상담", "정서", "심리", "불안", "위클래스", "wee"},
-    )
-    support_needs_care = _contains_any(
-        f"{student_text} {support_request} {observation_text}",
-        {"돌봄", "방과 후", "방과후", "보호자 부재", "귀가", "공백"},
-    )
-    support_needs_academic = _contains_any(
-        f"{student_text} {support_request} {observation_text}",
-        {"학업", "학습", "기초학력", "수업", "집중력", "학습지원"},
-    )
-    doc_is_scholarship = "장학금" in metadata.get("srvPvsnNm", "") or "장학금" in metadata.get("servNm", "")
-    doc_has_counseling = _contains_any(doc_text, DOMAIN_KEYWORDS["counseling"])
-    doc_has_care = _contains_any(doc_text, DOMAIN_KEYWORDS["care"])
-    doc_has_academic = _contains_any(doc_text, DOMAIN_KEYWORDS["academic"])
+    if metadata.get("_is_local_institution"):
+        raw_score += 0.6
+    if metadata.get("_is_scholarship") and "economic" in need_tags:
+        raw_score += 0.4
+    if metadata.get("_is_scholarship") and ("counseling" in need_tags or "care" in need_tags):
+        raw_score -= 0.7
+    if metadata.get("_is_school_outside_support"):
+        raw_score -= 1.0
+    if metadata.get("_is_direct_service") and priority_tags & {"counseling", "care", "academic"}:
+        raw_score += 1.2
+    if metadata.get("_is_scholarship") and priority_tags & {"counseling", "care"}:
+        raw_score -= 2.2
+    if priority_tags and not (priority_tags & doc_tags):
+        raw_score -= 1.4
 
-    if support_needs_counseling and doc_has_counseling:
-        score += 0.14
-    if support_needs_care and doc_has_care:
-        score += 0.14
-    if support_needs_academic and doc_has_academic:
-        score += 0.10
+    if profile["canonical_region"]:
+        doc_regions = metadata.get("_region_tokens", [])
+        if any(profile["canonical_region"] == _normalize_region_name(token) for token in doc_regions):
+            raw_score += 1.0
+        elif metadata.get("_is_nationwide"):
+            raw_score += 0.2
 
-    if "학교밖" not in student_text and "학교밖" not in support_request and "학교밖" in doc_text:
-        score -= 0.12
-
-    if doc_is_scholarship:
-        if support_needs_counseling and not doc_has_counseling:
-            score -= 0.12
-        if support_needs_care and not doc_has_care:
-            score -= 0.10
-        if support_needs_academic and not doc_has_academic:
-            score -= 0.04
+    age = profile["age"]
+    min_age = metadata.get("_age_min")
+    max_age = metadata.get("_age_max")
+    if age is not None and min_age is not None and max_age is not None:
+        midpoint = (min_age + max_age) / 2
+        spread = max(1.0, (max_age - min_age) / 2)
+        age_fit = max(0.0, 1.0 - (abs(age - midpoint) / spread))
+        raw_score += age_fit * 0.8
 
     if domain_scores:
-        domain_to_keywords = {
-            "학업": {"학업", "학습", "기초학력", "교육비", "멘토링", "장학금"},
-            "정서_심리": {"정서", "심리", "상담", "wee", "위클래스", "정신건강"},
-            "사회성": {"사회성", "또래", "관계", "집단상담", "갈등"},
-            "돌봄": {"돌봄", "방과후", "아이돌봄", "지역아동센터", "보호"},
-            "경제": {"차상위", "수급", "저소득", "교육비", "생활비", "장학금"},
-            "위기": {"위기", "긴급", "학대", "폭력", "보호시설"},
-            "장애_특수": {"장애", "특수교육", "발달장애"},
+        domain_map = {
+            "학업": "academic",
+            "정서_심리": "counseling",
+            "사회성": "social",
+            "돌봄": "care",
+            "경제": "economic",
+            "위기": "risk",
         }
-        dynamic_score = 0.0
-        for domain, urgency in domain_scores.items():
-            if domain == "분석근거":
-                continue
+        for domain, tag in domain_map.items():
             try:
-                urgency_value = float(urgency)
+                urgency = float(domain_scores.get(domain, 0.0))
             except (TypeError, ValueError):
-                continue
-            if urgency_value < 0.3:
-                continue
-            if _contains_any(doc_text, domain_to_keywords.get(domain, set())):
-                dynamic_score += urgency_value * 0.10
-        score += min(0.30, dynamic_score)
+                urgency = 0.0
+            if urgency >= 0.3 and tag in doc_tags:
+                raw_score += urgency * 1.1
 
-    return score
+    return raw_score
+
+
+def _calibrate_scores(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not results:
+        return results
+
+    raw_scores = [float(item["_raw_score"]) for item in results]
+    min_score = min(raw_scores)
+    max_score = max(raw_scores)
+    score_range = max_score - min_score
+
+    for index, item in enumerate(results):
+        raw_score = float(item["_raw_score"])
+        rank_ratio = index / max(1, len(results) - 1)
+        rank_score = 1.0 - rank_ratio
+        if score_range <= 0.0001:
+            normalized = max(0.30, 0.94 - (index * 0.035))
+        else:
+            relative = (raw_score - min_score) / score_range
+            normalized = 0.22 + (relative * 0.48) + (rank_score * 0.24)
+            if index == 0:
+                normalized = max(normalized, 0.93)
+            elif index == 1:
+                normalized = max(normalized, 0.87)
+            elif index == 2:
+                normalized = max(normalized, 0.82)
+            elif index < 5:
+                normalized = max(normalized, 0.74 - (index * 0.03))
+        item["relevance_score"] = round(max(0.01, min(0.99, normalized)), 6)
+        item["distance"] = round(1.0 - item["relevance_score"], 6)
+        del item["_raw_score"]
+    return results
 
 
 def _rank_documents(
@@ -551,59 +586,40 @@ def _rank_documents(
     query: str,
     top_k: int,
     context: dict[str, Any] | None = None,
-    vector_scores: dict[str, float] | None = None,
     domain_scores: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    query_terms = _tokenize_query(query)
-    vector_scores = vector_scores or {}
+    query_terms = _tokenize(query)
+    profile = _build_student_profile(context)
+
     scored_docs: list[dict[str, Any]] = []
+    fallback_docs: list[dict[str, Any]] = []
 
     for document in documents:
         metadata = document["metadata"]
-        lexical_score = (_weighted_row_match_score(query_terms, metadata) * 0.58) + (
-            _score_text_match(query_terms, metadata["_search_text"]) * 0.17
-        )
-        context_score = _score_context_alignment(metadata, context, domain_scores=domain_scores)
-        vector_score = vector_scores.get(metadata["servId"], 0.0) * 0.17
-        final_score = max(0.0, min(1.0, lexical_score + context_score + vector_score))
+        if not _passes_hard_filters(metadata, profile):
+            continue
 
-        scored_docs.append(
-            {
-                "distance": round(1.0 - final_score, 6),
-                "relevance_score": round(final_score, 6),
-                **{k: v for k, v in metadata.items() if not k.startswith("_")},
-            }
-        )
+        raw_score = _score_candidate(metadata, query_terms, profile, domain_scores)
+        item = {
+            **{k: v for k, v in metadata.items() if not k.startswith("_")},
+            "_raw_score": raw_score,
+        }
+        if raw_score >= DEFAULT_SCORE_THRESHOLD:
+            scored_docs.append(item)
+        else:
+            fallback_docs.append(item)
 
-    scored_docs.sort(
+    selected = scored_docs if len(scored_docs) >= top_k else scored_docs + fallback_docs
+    selected.sort(
         key=lambda item: (
-            item["relevance_score"],
+            item["_raw_score"],
             _safe_int(item.get("inqNum", "0")),
             item.get("servNm", ""),
         ),
         reverse=True,
     )
-
-    min_score = max(0.0, min(1.0, settings.rag_min_recommendation_score))
-    filtered_docs = [item for item in scored_docs if item["relevance_score"] >= min_score]
-    selected = filtered_docs if len(filtered_docs) >= top_k else scored_docs
-    return selected[:top_k]
-
-
-def _fallback_similarity_search(
-    documents: list[dict[str, Any]],
-    query: str,
-    top_k: int,
-    context: dict[str, Any] | None = None,
-    domain_scores: dict[str, float] | None = None,
-) -> list[dict[str, Any]]:
-    return _rank_documents(
-        documents=documents,
-        query=query,
-        top_k=top_k,
-        context=context,
-        domain_scores=domain_scores,
-    )
+    trimmed = selected[:top_k]
+    return _calibrate_scores(trimmed)
 
 
 def _build_vectorstore(documents: list[dict[str, Any]]) -> Any:
@@ -643,18 +659,14 @@ def search_relevant_institutions(
     if resolved_top_k <= 0:
         raise ValueError("top_k must be greater than 0.")
 
-    if csv_path is None:
-        csv_paths = _parse_csv_list(settings.rag_data_files)
-    else:
-        csv_paths = [_resolve_path(csv_path)]
-
+    csv_paths = [_resolve_path(csv_path)] if csv_path else _parse_csv_list(settings.rag_data_files)
     if not csv_paths:
         raise ValueError("No RAG CSV files are configured.")
 
     documents = _load_documents(csv_paths)
 
     if not settings.use_gemini_embeddings:
-        return _fallback_similarity_search(
+        return _rank_documents(
             documents=documents,
             query=query,
             top_k=resolved_top_k,
@@ -664,28 +676,20 @@ def search_relevant_institutions(
 
     try:
         vectorstore = _build_vectorstore(documents)
-        results = vectorstore.similarity_search_with_score(
-            query,
-            k=min(len(documents), max(resolved_top_k * 3, 50)),
-        )
-        vector_scores: dict[str, float] = {}
-        for doc, distance in results:
-            serv_id = str(doc.metadata.get("servId", "")).strip()
-            if not serv_id:
-                continue
-            relevance_score = 1 / (1 + float(distance))
-            vector_scores[serv_id] = max(vector_scores.get(serv_id, 0.0), relevance_score)
-
+        results = vectorstore.similarity_search_with_score(query, k=min(len(documents), max(60, resolved_top_k * 4)))
+        candidate_ids = {str(doc.metadata.get("servId", "")).strip() for doc, _ in results}
+        filtered_documents = [
+            document for document in documents if document["metadata"].get("servId", "") in candidate_ids
+        ]
         return _rank_documents(
-            documents=documents,
+            documents=filtered_documents or documents,
             query=query,
             top_k=resolved_top_k,
             context=context,
-            vector_scores=vector_scores,
             domain_scores=domain_scores,
         )
     except Exception:
-        return _fallback_similarity_search(
+        return _rank_documents(
             documents=documents,
             query=query,
             top_k=resolved_top_k,

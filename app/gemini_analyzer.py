@@ -77,6 +77,7 @@ def _extract_local_signals(request_data: AnalyzeStudentRequest) -> list[str]:
             [
                 info.support_request,
                 info.application_reason,
+                info.student_personal_info.school_level,
                 info.student_condition.student_status,
                 difficulties.academics,
                 difficulties.emotional_psychological,
@@ -292,6 +293,7 @@ def _build_compact_student_context(request_data: AnalyzeStudentRequest) -> str:
     return (
         f"학생이름: {personal.student_name}\n"
         f"지역: {personal.region}\n"
+        f"학교급: {personal.school_level}\n"
         f"학년/반: {personal.grade}학년 {personal.class_number}반\n"
         f"가정환경: {info.home_environment_and_eligibility.student_basic_info}, "
         f"{info.home_environment_and_eligibility.family_status}\n"

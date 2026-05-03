@@ -1,15 +1,39 @@
-from pydantic import BaseModel, ConfigDict, Field
+import re
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _join_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value).strip()
+
+
+def _parse_grade(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group(0)) if match else 0
 
 
 class StudentPersonalInfo(BaseModel):
     student_name: str = Field(..., alias="학생이름")
     region: str = Field("", alias="지역")
     grade: int = Field(..., alias="학년")
-    class_number: int = Field(..., alias="반")
+    class_number: int = Field(0, alias="반")
+    school_level: str = Field("", alias="학교급")
     birth_date: str = Field(..., alias="생년월일")
     gender: str = Field(..., alias="성별")
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("grade", "class_number", mode="before")
+    @classmethod
+    def parse_number_field(cls, value: Any) -> int:
+        return _parse_grade(value)
 
 
 class HomeEnvironmentAndEligibility(BaseModel):
@@ -76,6 +100,61 @@ class AnalyzeStudentRequest(BaseModel):
     all_data: AllData = Field(..., alias="전체데이터")
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_application_schema(cls, raw_data: Any) -> Any:
+        if not isinstance(raw_data, dict):
+            return raw_data
+
+        all_data = raw_data.get("전체데이터")
+        if not isinstance(all_data, dict):
+            return raw_data
+        if "통합신청서정보" in all_data:
+            return raw_data
+
+        application = all_data.get("학생맞춤통합지원_신청서")
+        if not isinstance(application, dict):
+            return raw_data
+
+        student_info = application.get("대상학생_정보", {}) or {}
+        basic_info = application.get("학생_기본사항", {}) or {}
+        difficulties = application.get("학생_어려움", {}) or {}
+
+        normalized = {
+            "전체데이터": {
+                "통합신청서정보": {
+                    "학생인적사항": {
+                        "학생이름": _join_value(student_info.get("성명")),
+                        "학년": _parse_grade(student_info.get("학년")),
+                        "반": 0,
+                        "지역": _join_value(student_info.get("거주지역")),
+                        "학교급": _join_value(student_info.get("학교급")),
+                        "생년월일": _join_value(student_info.get("생년월일")),
+                        "성별": _join_value(student_info.get("성별")),
+                    },
+                    "가정환경및자격": {
+                        "학생기본사항": _join_value(basic_info.get("학생현황")),
+                        "기초수급보장현황": _join_value(basic_info.get("기초수급_보장현황")),
+                        "가족현황": _join_value(basic_info.get("가족현황")),
+                    },
+                    "학생상태": {
+                        "학생현황": _join_value(basic_info.get("학생현황")),
+                        "학생어려움": {
+                            "학업": _join_value(difficulties.get("학업")),
+                            "심리_정서": _join_value(difficulties.get("심리_정서")),
+                            "돌봄_안전_건강": _join_value(difficulties.get("돌봄_안전_건강")),
+                            "경제_생활": _join_value(difficulties.get("경제_생활")),
+                            "기타": _join_value(difficulties.get("기타")),
+                        },
+                    },
+                    "신청사유": _join_value(application.get("신청_사유")),
+                    "지원요청사항": _join_value(application.get("지원_요청_사항")),
+                },
+                "관찰일지목록": all_data.get("관찰일지목록", []),
+            }
+        }
+        return normalized
 
 
 class AnalysisSummary(BaseModel):

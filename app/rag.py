@@ -494,6 +494,7 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
     student_text = _normalize_text(str(context.get("student_text", "")))
     support_request = _normalize_text(str(context.get("support_request", "")))
     observation_text = _normalize_text(str(context.get("observation_text", "")))
+    school_level = _normalize_text(str(context.get("student_school_level", "")))
     region = _normalize_text(str(context.get("student_region", "")))
     birth_date = _normalize_text(str(context.get("student_birth_date", "")))
     age = _calculate_age(birth_date)
@@ -501,6 +502,7 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
     difficulty_text = " ".join(
         [
             student_text,
+            school_level,
             support_request,
             observation_text,
             _normalize_text(str(context.get("application_reason", ""))),
@@ -518,7 +520,7 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
     observation_terms = _tokenize(observation_text)
     summary_terms = _tokenize(student_text + " " + support_request)
     grade = int(context.get("student_grade", 0) or 0)
-    student_stage = _infer_student_school_stage(difficulty_text, grade, age)
+    student_stage = _infer_student_school_stage(f"{school_level} {difficulty_text}", grade, age)
     student_eligibilities = _extract_student_eligibilities(difficulty_text)
 
     return {
@@ -531,6 +533,7 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
         "observation_terms": observation_terms,
         "summary_terms": summary_terms,
         "student_grade": grade,
+        "student_school_level": school_level,
         "school_stage": student_stage,
         "student_eligibilities": student_eligibilities,
         "difficulty_text": difficulty_text,

@@ -64,6 +64,7 @@ def _build_rag_context(
 
     full_text_parts = [
         personal.region,
+        personal.school_level,
         analysis_summary,
         " ".join(key_signals),
         info.support_request,
@@ -82,6 +83,7 @@ def _build_rag_context(
 
     return {
         "student_grade": personal.grade,
+        "student_school_level": personal.school_level,
         "student_region": personal.region,
         "student_birth_date": personal.birth_date,
         "student_age": _calculate_age(personal.birth_date),
@@ -104,6 +106,7 @@ def analyze_student(request: AnalyzeStudentRequest) -> AnalyzeStudentResponse:
         analysis = analyze_student_data(request)
         student_context = (
             f"지역: {request.all_data.integrated_application_info.student_personal_info.region}\n"
+            f"학교급: {request.all_data.integrated_application_info.student_personal_info.school_level}\n"
             f"생년월일: {request.all_data.integrated_application_info.student_personal_info.birth_date}\n"
             f"학년: {request.all_data.integrated_application_info.student_personal_info.grade}\n"
             f"지원요청: {request.all_data.integrated_application_info.support_request}\n"
@@ -132,6 +135,7 @@ def analyze_student(request: AnalyzeStudentRequest) -> AnalyzeStudentResponse:
         [
             ", ".join(key_signals),
             info.student_personal_info.region,
+            info.student_personal_info.school_level,
             analysis.analysis,
             info.support_request,
             info.application_reason,

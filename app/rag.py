@@ -105,6 +105,9 @@ LOCAL_RESTRICTION_KEYWORDS = {
     "반경",
     "읍",
     "면",
+    "소재",
+    "폐광지역",
+    "도서 벽지",
 }
 LOW_INCOME_KEYWORDS = {"차상위", "수급", "저소득", "교육비", "납부 지연", "기초생활", "생활보호"}
 SERVICE_TAG_KEYWORDS: dict[str, set[str]] = {
@@ -147,15 +150,21 @@ CONDITIONAL_ELIGIBILITY_KEYWORDS: dict[str, set[str]] = {
     "youth_leader_child": {"청소년지도위원", "청소년지도협의회"},
     "talent_award": {"특기생", "예체능", "기능/체육/예능", "대회", "입상", "재능이 뛰어난"},
     "school_outside": {"학교밖", "학업중단", "자퇴", "검정고시"},
+    "opportunity_admission": {"기회균등전형", "기회균등", "사회통합전형", "특목고"},
     "teen_parent": {"청소년한부모", "청소년 한부모"},
     "single_parent_family": {"한부모가족", "법정 한부모"},
+    "multi_child_family": {"다자녀"},
     "orphan_head_household": {"소년소녀가장"},
     "union_member_family": {"조합원", "신협", "공제"},
     "seafarer_family": {"선원", "승무경력", "선사"},
     "power_plant_resident": {"발전소", "원자력", "화력본부", "댐", "주변지역", "반경"},
     "academic_excellence": {"성적우수", "석차", "성적의", "직전학기 성적", "학교석차"},
+    "grade_merit": {"내신", "등급 평균", "전국연합학력평가", "학업 성적", "상위 50%"},
     "property_tax_limit": {"재산세"},
     "arts_major": {"발레", "전공생"},
+    "environment_worker_family": {"환경미화원"},
+    "special_education": {"특수교육대상자", "장애학생", "경계선지능", "난독", "난산"},
+    "remote_area": {"폐광지역", "도서 벽지"},
 }
 AGE_KEYWORD_RULES: tuple[tuple[str, int, int], ...] = (
     ("영유아", 0, 6),
@@ -300,10 +309,18 @@ def _infer_age_bounds(text: str) -> tuple[int | None, int | None]:
         elif operator == "초과":
             min_age = age_value + 1 if min_age is None else max(min_age, age_value + 1)
 
+    keyword_lows: list[int] = []
+    keyword_highs: list[int] = []
     for keyword, low_value, high_value in AGE_KEYWORD_RULES:
         if keyword in cleaned:
-            min_age = low_value if min_age is None else max(min_age, low_value)
-            max_age = high_value if max_age is None else min(max_age, high_value)
+            keyword_lows.append(low_value)
+            keyword_highs.append(high_value)
+
+    if keyword_lows:
+        keyword_min = min(keyword_lows)
+        keyword_max = max(keyword_highs)
+        min_age = keyword_min if min_age is None else max(min_age, keyword_min)
+        max_age = keyword_max if max_age is None else min(max_age, keyword_max)
 
     return min_age, max_age
 
@@ -433,17 +450,31 @@ def _normalize_row(row: dict[str, str], source_dataset: str) -> dict[str, Any]:
             metadata["servDgst"],
         ]
     )
+    service_text = " ".join(
+        [
+            metadata["servNm"],
+            metadata["intrsThemaArray"],
+            metadata["lifeArray"],
+            metadata["srvPvsnNm"],
+            metadata["servDgst"],
+        ]
+    )
     metadata["_search_text"] = _build_searchable_text(metadata)
     metadata["_region_tokens"] = _extract_declared_regions(combined_text)
     metadata["_age_min"], metadata["_age_max"] = _infer_age_bounds(combined_text)
-    metadata["_tags"] = _extract_service_tags(combined_text)
+    metadata["_tags"] = _extract_service_tags(service_text)
     metadata["_school_stages"] = _extract_school_stages(combined_text)
     metadata["_required_eligibilities"] = _extract_required_eligibilities(combined_text)
     metadata["_is_local_institution"] = source_dataset == "integrated_institution_data.csv"
-    metadata["_is_nationwide"] = _contains_any(combined_text, NATIONWIDE_KEYWORDS) and not metadata["_region_tokens"]
     metadata["_is_scholarship"] = "장학금" in combined_text
     metadata["_is_region_restricted"] = _is_region_restricted(metadata, combined_text)
     metadata["_is_restricted_scholarship"] = _is_restricted_scholarship(metadata, combined_text)
+    metadata["_is_nationwide"] = (
+        _contains_any(combined_text, NATIONWIDE_KEYWORDS)
+        and not metadata["_region_tokens"]
+        and not metadata["_is_region_restricted"]
+        and not metadata["_is_restricted_scholarship"]
+    )
     metadata["_requires_local_region"] = metadata["_is_local_institution"] or metadata["_is_region_restricted"] or (
         metadata["_is_restricted_scholarship"]
         or bool(metadata["_region_tokens"]) and not metadata["_is_nationwide"]
@@ -474,11 +505,8 @@ def _load_documents(csv_paths: list[Path]) -> list[dict[str, Any]]:
 
             for row in reader:
                 metadata = _normalize_row(row, source_dataset=csv_path.name)
-                dedupe_key = (
-                    metadata["sourceDataset"],
-                    metadata["servId"],
-                    metadata["servNm"],
-                )
+                unique_id = metadata["servId"] or f"{metadata['servNm']}|{metadata['servDgst']}"
+                dedupe_key = (metadata["sourceDataset"], unique_id, metadata["servNm"])
                 if dedupe_key in seen_keys:
                     continue
                 seen_keys.add(dedupe_key)
@@ -738,6 +766,22 @@ def _score_candidate(
     if priority_tags and not (priority_tags & doc_tags):
         raw_score -= 1.4
 
+    difficulty_text = profile["difficulty_text"]
+    student_eligibilities = set(profile.get("student_eligibilities", set()))
+    if "low_income" in student_eligibilities and _contains_any(doc_text, LOW_INCOME_KEYWORDS):
+        raw_score += 2.4
+    if _contains_any(difficulty_text, {"국민기초생활수급자", "법정차상위", "교육비", "경제적 어려움"}):
+        if _contains_any(doc_text, {"교육급여", "교육비 지원", "고교학비", "학비", "저소득층"}):
+            raw_score += 2.4
+    if _contains_any(difficulty_text, {"석식", "저녁급식", "급식", "식사"}):
+        if _contains_any(doc_text, {"석식", "저녁급식", "급식비"}):
+            raw_score += 3.0
+    if _contains_any(difficulty_text, {"방과 후", "방과후", "학습 보충", "맞춤형 학습"}):
+        if _contains_any(doc_text, {"방과후학교", "자유수강권", "지역아동센터", "방과후 돌봄"}):
+            raw_score += 3.0
+    if _contains_any(doc_text, {"기회균등전형", "사회통합전형", "특목고"}):
+        raw_score -= 4.0
+
     if profile["canonical_region"]:
         doc_regions = metadata.get("_region_tokens", [])
         if any(profile["canonical_region"] == _normalize_region_name(token) for token in doc_regions):
@@ -778,28 +822,9 @@ def _calibrate_scores(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not results:
         return results
 
-    raw_scores = [float(item["_raw_score"]) for item in results]
-    min_score = min(raw_scores)
-    max_score = max(raw_scores)
-    score_range = max_score - min_score
-
-    for index, item in enumerate(results):
+    for item in results:
         raw_score = float(item["_raw_score"])
-        rank_ratio = index / max(1, len(results) - 1)
-        rank_score = 1.0 - rank_ratio
-        if score_range <= 0.0001:
-            normalized = max(0.30, 0.94 - (index * 0.035))
-        else:
-            relative = (raw_score - min_score) / score_range
-            normalized = 0.22 + (relative * 0.48) + (rank_score * 0.24)
-            if index == 0:
-                normalized = max(normalized, 0.93)
-            elif index == 1:
-                normalized = max(normalized, 0.87)
-            elif index == 2:
-                normalized = max(normalized, 0.82)
-            elif index < 5:
-                normalized = max(normalized, 0.74 - (index * 0.03))
+        normalized = raw_score / 18.0
         item["relevance_score"] = round(max(0.01, min(0.99, normalized)), 6)
         item["distance"] = round(1.0 - item["relevance_score"], 6)
         del item["_raw_score"]

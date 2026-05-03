@@ -250,6 +250,19 @@ def _extract_region_tokens(region: str) -> list[str]:
     return result
 
 
+def _extract_local_region_tokens(region_tokens: list[str]) -> list[str]:
+    local_tokens: list[str] = []
+    for token in region_tokens:
+        normalized = _normalize_text(token)
+        if not normalized:
+            continue
+        if normalized.endswith(("특별시", "광역시", "특별자치시", "특별자치도", "도")):
+            continue
+        if normalized.endswith(("시", "군", "구")) and normalized not in local_tokens:
+            local_tokens.append(normalized)
+    return local_tokens
+
+
 def _extract_declared_regions(text: str) -> list[str]:
     cleaned = _normalize_text(text)
     if not cleaned:
@@ -551,10 +564,12 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
     student_stage = _infer_student_school_stage(f"{school_level} {difficulty_text}", grade, age)
     student_eligibilities = _extract_student_eligibilities(difficulty_text)
 
+    region_tokens = _extract_region_tokens(region)
     return {
         "age": age,
         "region": region,
-        "region_tokens": _extract_region_tokens(region),
+        "region_tokens": region_tokens,
+        "local_region_tokens": _extract_local_region_tokens(region_tokens),
         "canonical_region": _normalize_region_name(region),
         "need_tags": need_tags,
         "priority_tags": _extract_service_tags(f"{support_request} {observation_text}".lower()),
@@ -784,8 +799,15 @@ def _score_candidate(
 
     if profile["canonical_region"]:
         doc_regions = metadata.get("_region_tokens", [])
+        doc_local_regions = _extract_local_region_tokens(doc_regions)
+        student_local_regions = profile.get("local_region_tokens", [])
         if any(profile["canonical_region"] == _normalize_region_name(token) for token in doc_regions):
             raw_score += 1.0
+            if student_local_regions and doc_local_regions:
+                if set(student_local_regions) & set(doc_local_regions):
+                    raw_score += 2.0
+                elif metadata.get("_is_local_institution") or metadata.get("_is_region_restricted"):
+                    raw_score -= 1.2
         elif metadata.get("_is_nationwide"):
             raw_score += 0.2
 

@@ -168,6 +168,8 @@ def analyze_student(request: AnalyzeStudentRequest) -> AnalyzeStudentResponse:
     recommendations: list[RecommendationItem] = []
     for item in rag_results:
         suitability = round(max(0.0, min(1.0, float(item.get("relevance_score", 0)))) * 100)
+        if suitability < 50:
+            continue
         recommendations.append(
             RecommendationItem(
                 category=item.get("category", ""),

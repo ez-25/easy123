@@ -91,6 +91,22 @@ LOCAL_SERVICE_KEYWORDS = {
 NATIONWIDE_KEYWORDS = {"전국", "전국단위", "전국 공통", "중앙부처", "전국 누구나", "전국민"}
 SEXUALITY_SERVICE_KEYWORDS = {"성문화센터", "성교육", "성폭력", "성상담", "성범죄", "디지털성범죄"}
 SEXUALITY_NEED_KEYWORDS = {"성폭력", "성교육", "성상담", "성범죄", "디지털성범죄", "임신", "성문제"}
+LOCAL_RESTRICTION_KEYWORDS = {
+    "관내",
+    "소재학교",
+    "소재 학교",
+    "거주",
+    "주민등록",
+    "지역연고",
+    "주변지역",
+    "발전소",
+    "원자력",
+    "댐",
+    "반경",
+    "읍",
+    "면",
+}
+LOW_INCOME_KEYWORDS = {"차상위", "수급", "저소득", "교육비", "납부 지연", "기초생활", "생활보호"}
 SERVICE_TAG_KEYWORDS: dict[str, set[str]] = {
     "academic": {"학업", "학습", "기초학력", "교육", "학비", "교육비", "멘토링", "학교"},
     "counseling": {"상담", "심리", "정서", "정신건강", "wee", "위클래스", "치유"},
@@ -131,6 +147,15 @@ CONDITIONAL_ELIGIBILITY_KEYWORDS: dict[str, set[str]] = {
     "youth_leader_child": {"청소년지도위원", "청소년지도협의회"},
     "talent_award": {"특기생", "예체능", "기능/체육/예능", "대회", "입상", "재능이 뛰어난"},
     "school_outside": {"학교밖", "학업중단", "자퇴", "검정고시"},
+    "teen_parent": {"청소년한부모", "청소년 한부모"},
+    "single_parent_family": {"한부모가족", "법정 한부모"},
+    "orphan_head_household": {"소년소녀가장"},
+    "union_member_family": {"조합원", "신협", "공제"},
+    "seafarer_family": {"선원", "승무경력", "선사"},
+    "power_plant_resident": {"발전소", "원자력", "화력본부", "댐", "주변지역", "반경"},
+    "academic_excellence": {"성적우수", "석차", "성적의", "직전학기 성적", "학교석차"},
+    "property_tax_limit": {"재산세"},
+    "arts_major": {"발레", "전공생"},
 }
 AGE_KEYWORD_RULES: tuple[tuple[str, int, int], ...] = (
     ("영유아", 0, 6),
@@ -342,12 +367,34 @@ def _extract_required_eligibilities(text: str) -> set[str]:
 def _extract_student_eligibilities(text: str) -> set[str]:
     cleaned = _normalize_text(text)
     eligibilities: set[str] = set()
-    if any(keyword in cleaned for keyword in {"차상위", "수급", "저소득", "교육비", "납부 지연"}):
+    if any(keyword in cleaned for keyword in LOW_INCOME_KEYWORDS):
         eligibilities.add("low_income")
     for eligibility, keywords in CONDITIONAL_ELIGIBILITY_KEYWORDS.items():
         if any(keyword in cleaned for keyword in keywords):
             eligibilities.add(eligibility)
     return eligibilities
+
+
+def _is_region_restricted(metadata: dict[str, Any], combined_text: str) -> bool:
+    if metadata["welfareType"] == "중앙부처":
+        return False
+    if metadata["category"] == "기관":
+        return True
+    if "지역연고" in metadata["srvPvsnNm"]:
+        return True
+    if _contains_any(combined_text, LOCAL_RESTRICTION_KEYWORDS):
+        return True
+    return metadata["welfareType"] in {"지자체", "지자체(출자출연기관)"}
+
+
+def _is_restricted_scholarship(metadata: dict[str, Any], combined_text: str) -> bool:
+    if "장학금" not in combined_text:
+        return False
+    if metadata["welfareType"] == "중앙부처" or _contains_any(combined_text, NATIONWIDE_KEYWORDS):
+        return False
+    if _contains_any(combined_text, LOCAL_RESTRICTION_KEYWORDS):
+        return True
+    return bool(metadata["_required_eligibilities"]) or metadata["welfareType"] != "중앙부처"
 
 
 def _build_searchable_text(metadata: dict[str, str]) -> str:
@@ -394,10 +441,13 @@ def _normalize_row(row: dict[str, str], source_dataset: str) -> dict[str, Any]:
     metadata["_required_eligibilities"] = _extract_required_eligibilities(combined_text)
     metadata["_is_local_institution"] = source_dataset == "integrated_institution_data.csv"
     metadata["_is_nationwide"] = _contains_any(combined_text, NATIONWIDE_KEYWORDS) and not metadata["_region_tokens"]
-    metadata["_requires_local_region"] = metadata["_is_local_institution"] or (
-        bool(metadata["_region_tokens"]) and not metadata["_is_nationwide"]
-    )
     metadata["_is_scholarship"] = "장학금" in combined_text
+    metadata["_is_region_restricted"] = _is_region_restricted(metadata, combined_text)
+    metadata["_is_restricted_scholarship"] = _is_restricted_scholarship(metadata, combined_text)
+    metadata["_requires_local_region"] = metadata["_is_local_institution"] or metadata["_is_region_restricted"] or (
+        metadata["_is_restricted_scholarship"]
+        or bool(metadata["_region_tokens"]) and not metadata["_is_nationwide"]
+    )
     metadata["_is_school_outside_support"] = "school_outside" in metadata["_required_eligibilities"]
     metadata["_is_sexuality_service"] = _contains_any(combined_text, SEXUALITY_SERVICE_KEYWORDS)
     metadata["_is_direct_service"] = any(

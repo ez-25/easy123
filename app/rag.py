@@ -89,6 +89,8 @@ LOCAL_SERVICE_KEYWORDS = {
     "수련관",
 }
 NATIONWIDE_KEYWORDS = {"전국", "전국단위", "전국 공통", "중앙부처", "전국 누구나", "전국민"}
+SEXUALITY_SERVICE_KEYWORDS = {"성문화센터", "성교육", "성폭력", "성상담", "성범죄", "디지털성범죄"}
+SEXUALITY_NEED_KEYWORDS = {"성폭력", "성교육", "성상담", "성범죄", "디지털성범죄", "임신", "성문제"}
 SERVICE_TAG_KEYWORDS: dict[str, set[str]] = {
     "academic": {"학업", "학습", "기초학력", "교육", "학비", "교육비", "멘토링", "학교"},
     "counseling": {"상담", "심리", "정서", "정신건강", "wee", "위클래스", "치유"},
@@ -96,6 +98,39 @@ SERVICE_TAG_KEYWORDS: dict[str, set[str]] = {
     "care": {"돌봄", "방과후", "방과 후", "아이돌봄", "보호", "지역아동센터", "아카데미"},
     "economic": {"장학금", "저소득", "차상위", "수급", "생활비", "급여", "바우처"},
     "risk": {"위기", "긴급", "학대", "폭력", "보호시설", "가출"},
+}
+SCHOOL_STAGE_RULES: dict[str, tuple[int, int]] = {
+    "elementary": (1, 6),
+    "middle": (7, 9),
+    "high": (10, 12),
+}
+HIGH_SCHOOL_KEYWORDS = {
+    "고등학생",
+    "고등학교",
+    "고교",
+    "고등",
+    "일반계고",
+    "과학고",
+    "국제고",
+    "마이스터고",
+    "영재고",
+    "예술고",
+    "외국어고",
+    "일반고",
+    "체육고",
+    "특성화고",
+    "자율고",
+}
+MIDDLE_SCHOOL_KEYWORDS = {"중학생", "중학교", "중등"}
+ELEMENTARY_SCHOOL_KEYWORDS = {"초등학생", "초등학교", "초등"}
+CONDITIONAL_ELIGIBILITY_KEYWORDS: dict[str, set[str]] = {
+    "worker": {"근로청소년", "산업체 근로", "근로자", "직장"},
+    "disabled_family": {"장애인", "중증장애", "장애인 가족"},
+    "multicultural_family": {"다문화", "다문화가족"},
+    "patriot_veteran": {"국가유공자", "보훈", "의사상자", "유족"},
+    "youth_leader_child": {"청소년지도위원", "청소년지도협의회"},
+    "talent_award": {"특기생", "예체능", "기능/체육/예능", "대회", "입상", "재능이 뛰어난"},
+    "school_outside": {"학교밖", "학업중단", "자퇴", "검정고시"},
 }
 AGE_KEYWORD_RULES: tuple[tuple[str, int, int], ...] = (
     ("영유아", 0, 6),
@@ -161,7 +196,7 @@ def _normalize_region_name(region: str) -> str:
     if not cleaned:
         return ""
     for canonical, aliases in REGION_ALIASES.items():
-        if any(alias in cleaned for alias in aliases):
+        if any(cleaned == alias or cleaned.startswith(alias) for alias in aliases):
             return canonical
     return cleaned
 
@@ -187,7 +222,7 @@ def _extract_declared_regions(text: str) -> list[str]:
         return []
     result: list[str] = []
     canonical = _normalize_region_name(cleaned)
-    if canonical:
+    if canonical and canonical != cleaned:
         result.append(canonical)
     for match in REGION_PATTERN.findall(cleaned):
         if match not in result:
@@ -257,6 +292,64 @@ def _extract_service_tags(text: str) -> set[str]:
     return tags
 
 
+def _extract_school_stages(text: str) -> set[str]:
+    cleaned = _normalize_text(text)
+    stages: set[str] = set()
+    if _contains_any(cleaned, ELEMENTARY_SCHOOL_KEYWORDS):
+        stages.add("elementary")
+    if _contains_any(cleaned, MIDDLE_SCHOOL_KEYWORDS):
+        stages.add("middle")
+    if _contains_any(cleaned, HIGH_SCHOOL_KEYWORDS):
+        stages.add("high")
+    return stages
+
+
+def _grade_to_school_stage(grade: int) -> str:
+    if 1 <= grade <= 6:
+        return "elementary"
+    if 7 <= grade <= 9:
+        return "middle"
+    if 10 <= grade <= 12:
+        return "high"
+    return ""
+
+
+def _infer_student_school_stage(text: str, grade: int, age: int | None) -> str:
+    explicit_stages = _extract_school_stages(text)
+    if len(explicit_stages) == 1:
+        return next(iter(explicit_stages))
+
+    if age is not None:
+        if 7 <= age <= 12:
+            return "elementary"
+        if 13 <= age <= 15:
+            return "middle"
+        if 16 <= age <= 18:
+            return "high"
+
+    return _grade_to_school_stage(grade)
+
+
+def _extract_required_eligibilities(text: str) -> set[str]:
+    cleaned = _normalize_text(text)
+    required: set[str] = set()
+    for eligibility, keywords in CONDITIONAL_ELIGIBILITY_KEYWORDS.items():
+        if any(keyword in cleaned for keyword in keywords):
+            required.add(eligibility)
+    return required
+
+
+def _extract_student_eligibilities(text: str) -> set[str]:
+    cleaned = _normalize_text(text)
+    eligibilities: set[str] = set()
+    if any(keyword in cleaned for keyword in {"차상위", "수급", "저소득", "교육비", "납부 지연"}):
+        eligibilities.add("low_income")
+    for eligibility, keywords in CONDITIONAL_ELIGIBILITY_KEYWORDS.items():
+        if any(keyword in cleaned for keyword in keywords):
+            eligibilities.add(eligibility)
+    return eligibilities
+
+
 def _build_searchable_text(metadata: dict[str, str]) -> str:
     return " ".join(_normalize_text(metadata.get(column, "")) for column in NORMALIZED_COLUMNS).lower()
 
@@ -297,13 +390,16 @@ def _normalize_row(row: dict[str, str], source_dataset: str) -> dict[str, Any]:
     metadata["_region_tokens"] = _extract_declared_regions(combined_text)
     metadata["_age_min"], metadata["_age_max"] = _infer_age_bounds(combined_text)
     metadata["_tags"] = _extract_service_tags(combined_text)
+    metadata["_school_stages"] = _extract_school_stages(combined_text)
+    metadata["_required_eligibilities"] = _extract_required_eligibilities(combined_text)
     metadata["_is_local_institution"] = source_dataset == "integrated_institution_data.csv"
     metadata["_is_nationwide"] = _contains_any(combined_text, NATIONWIDE_KEYWORDS) and not metadata["_region_tokens"]
     metadata["_requires_local_region"] = metadata["_is_local_institution"] or (
         bool(metadata["_region_tokens"]) and not metadata["_is_nationwide"]
     )
     metadata["_is_scholarship"] = "장학금" in combined_text
-    metadata["_is_school_outside_support"] = "학교밖" in combined_text
+    metadata["_is_school_outside_support"] = "school_outside" in metadata["_required_eligibilities"]
+    metadata["_is_sexuality_service"] = _contains_any(combined_text, SEXUALITY_SERVICE_KEYWORDS)
     metadata["_is_direct_service"] = any(
         keyword in combined_text for keyword in {"상담", "서비스", "프로그램", "돌봄", "보호", "연계", "센터"}
     ) and "장학금" not in combined_text
@@ -371,6 +467,9 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
 
     observation_terms = _tokenize(observation_text)
     summary_terms = _tokenize(student_text + " " + support_request)
+    grade = int(context.get("student_grade", 0) or 0)
+    student_stage = _infer_student_school_stage(difficulty_text, grade, age)
+    student_eligibilities = _extract_student_eligibilities(difficulty_text)
 
     return {
         "age": age,
@@ -381,7 +480,9 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
         "priority_tags": _extract_service_tags(f"{support_request} {observation_text}".lower()),
         "observation_terms": observation_terms,
         "summary_terms": summary_terms,
-        "student_grade": int(context.get("student_grade", 0) or 0),
+        "student_grade": grade,
+        "school_stage": student_stage,
+        "student_eligibilities": student_eligibilities,
         "difficulty_text": difficulty_text,
     }
 
@@ -409,14 +510,18 @@ def _is_region_eligible(metadata: dict[str, Any], profile: dict[str, Any]) -> bo
     if metadata.get("_is_local_institution"):
         if canonical_region and any(canonical_region == _normalize_region_name(token) for token in doc_regions):
             return True
-        return any(token in doc_text for token in student_tokens if token)
+        if doc_regions:
+            return False
+        return any(re.search(rf"(^|\\s){re.escape(token)}($|\\s)", doc_text) for token in student_tokens if token)
 
     if not metadata.get("_requires_local_region"):
         return True
 
     if canonical_region and any(canonical_region == _normalize_region_name(token) for token in doc_regions):
         return True
-    return any(token in doc_text for token in student_tokens if token)
+    if doc_regions:
+        return False
+    return any(re.search(rf"(^|\\s){re.escape(token)}($|\\s)", doc_text) for token in student_tokens if token)
 
 
 def _is_age_eligible(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
@@ -453,15 +558,63 @@ def _is_age_eligible_relaxed(metadata: dict[str, Any], profile: dict[str, Any]) 
     return False
 
 
+def _is_school_stage_eligible(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
+    doc_stages = metadata.get("_school_stages", set())
+    student_stage = profile.get("school_stage", "")
+    if not doc_stages or not student_stage:
+        return True
+    if student_stage in doc_stages:
+        return True
+
+    age = profile.get("age")
+    if age is None:
+        return False
+
+    for stage in doc_stages:
+        low_grade, high_grade = SCHOOL_STAGE_RULES.get(stage, (0, 0))
+        if not low_grade:
+            continue
+        # Korean school age is not exact enough to be a hard grade conversion,
+        # but this keeps obviously impossible matches out of the top results.
+        low_age = low_grade + 6
+        high_age = high_grade + 7
+        if low_age <= age <= high_age:
+            return True
+    return False
+
+
+def _has_required_eligibilities(metadata: dict[str, Any], profile: dict[str, Any]) -> bool:
+    required = set(metadata.get("_required_eligibilities", set()))
+    if not required:
+        return True
+
+    student_eligibilities = set(profile.get("student_eligibilities", set()))
+    missing = required - student_eligibilities
+
+    # Low-income eligibility is often a broad condition in scholarship data. It is
+    # handled by positive scoring, while uncommon special qualifications are hard filters.
+    if not missing:
+        return True
+    return False
+
+
 def _passes_hard_filters(
     metadata: dict[str, Any],
     profile: dict[str, Any],
     relax_age: bool = False,
 ) -> bool:
-    if metadata.get("_is_school_outside_support") and not any(
-        keyword in profile["difficulty_text"] for keyword in {"학교밖", "학업중단", "자퇴", "검정고시"}
-    ):
+    if not _is_school_stage_eligible(metadata, profile):
         return False
+
+    if metadata.get("_is_school_outside_support") and "school_outside" not in profile["student_eligibilities"]:
+        return False
+
+    if metadata.get("_is_sexuality_service") and not _contains_any(profile["difficulty_text"], SEXUALITY_NEED_KEYWORDS):
+        return False
+
+    if not _has_required_eligibilities(metadata, profile):
+        return False
+
     age_eligible = _is_age_eligible_relaxed(metadata, profile) if relax_age else _is_age_eligible(metadata, profile)
     return _is_region_eligible(metadata, profile) and age_eligible
 
@@ -509,26 +662,26 @@ def _score_candidate(
     raw_score += len(priority_tags & doc_tags) * 1.6
 
     if "counseling" in need_tags and "counseling" in doc_tags:
-        raw_score += 1.0
+        raw_score += 1.6
     if "care" in need_tags and "care" in doc_tags:
-        raw_score += 1.0
+        raw_score += 1.5
     if "academic" in need_tags and "academic" in doc_tags:
-        raw_score += 0.9
+        raw_score += 1.1
     if "economic" in need_tags and "economic" in doc_tags:
         raw_score += 0.7
 
     if metadata.get("_is_local_institution"):
-        raw_score += 0.6
+        raw_score += 1.0
     if metadata.get("_is_scholarship") and "economic" in need_tags:
         raw_score += 0.4
     if metadata.get("_is_scholarship") and ("counseling" in need_tags or "care" in need_tags):
-        raw_score -= 0.7
+        raw_score -= 1.4
     if metadata.get("_is_school_outside_support"):
         raw_score -= 1.0
     if metadata.get("_is_direct_service") and priority_tags & {"counseling", "care", "academic"}:
-        raw_score += 1.2
+        raw_score += 2.0
     if metadata.get("_is_scholarship") and priority_tags & {"counseling", "care"}:
-        raw_score -= 2.2
+        raw_score -= 3.0
     if priority_tags and not (priority_tags & doc_tags):
         raw_score -= 1.4
 
@@ -629,7 +782,7 @@ def _rank_documents(
         else:
             fallback_docs.append(item)
 
-    selected = scored_docs if len(scored_docs) >= top_k else scored_docs + fallback_docs
+    selected = scored_docs or fallback_docs
     selected.sort(
         key=lambda item: (
             item["_raw_score"],

@@ -91,6 +91,31 @@ LOCAL_SERVICE_KEYWORDS = {
 NATIONWIDE_KEYWORDS = {"전국", "전국단위", "전국 공통", "중앙부처", "전국 누구나", "전국민"}
 SEXUALITY_SERVICE_KEYWORDS = {"성문화센터", "성교육", "성폭력", "성상담", "성범죄", "디지털성범죄"}
 SEXUALITY_NEED_KEYWORDS = {"성폭력", "성교육", "성상담", "성범죄", "디지털성범죄", "임신", "성문제"}
+FEMALE_ONLY_KEYWORDS = {
+    "여성 청소년",
+    "여성청소년",
+    "여학생",
+    "여아",
+    "월경",
+    "월경통",
+    "생리",
+    "생리대",
+    "보건위생용품",
+    "위생용품",
+    "여성용품",
+    "임신",
+    "출산",
+    "산모",
+    "난임",
+    "자궁",
+}
+MALE_ONLY_KEYWORDS = {
+    "남성 청소년",
+    "남성청소년",
+    "남학생",
+    "남아",
+    "남성",
+}
 LOCAL_RESTRICTION_KEYWORDS = {
     "관내",
     "소재학교",
@@ -223,6 +248,26 @@ def _tokenize(text: str) -> list[str]:
 
 def _contains_any(text: str, keywords: set[str]) -> bool:
     return any(keyword in text for keyword in keywords)
+
+
+def _normalize_gender(value: str) -> str:
+    cleaned = _normalize_text(value).lower()
+    if cleaned in {"남", "남자", "남성", "m", "male", "boy"}:
+        return "male"
+    if cleaned in {"여", "여자", "여성", "f", "female", "girl"}:
+        return "female"
+    return ""
+
+
+def _infer_gender_restriction(text: str) -> str:
+    cleaned = _normalize_text(text)
+    female_only = _contains_any(cleaned, FEMALE_ONLY_KEYWORDS)
+    male_only = _contains_any(cleaned, MALE_ONLY_KEYWORDS)
+    if female_only and not male_only:
+        return "female"
+    if male_only and not female_only:
+        return "male"
+    return ""
 
 
 def _normalize_region_name(region: str) -> str:
@@ -494,6 +539,7 @@ def _normalize_row(row: dict[str, str], source_dataset: str) -> dict[str, Any]:
     )
     metadata["_is_school_outside_support"] = "school_outside" in metadata["_required_eligibilities"]
     metadata["_is_sexuality_service"] = _contains_any(combined_text, SEXUALITY_SERVICE_KEYWORDS)
+    metadata["_gender_restriction"] = _infer_gender_restriction(combined_text)
     metadata["_is_direct_service"] = any(
         keyword in combined_text for keyword in {"상담", "서비스", "프로그램", "돌봄", "보호", "연계", "센터"}
     ) and "장학금" not in combined_text
@@ -536,9 +582,12 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
     support_request = _normalize_text(str(context.get("support_request", "")))
     observation_text = _normalize_text(str(context.get("observation_text", "")))
     school_level = _normalize_text(str(context.get("student_school_level", "")))
+    gender = _normalize_gender(str(context.get("student_gender", "")))
     region = _normalize_text(str(context.get("student_region", "")))
     birth_date = _normalize_text(str(context.get("student_birth_date", "")))
-    age = _calculate_age(birth_date)
+    age = context.get("student_age")
+    if not isinstance(age, int):
+        age = _calculate_age(birth_date)
 
     difficulty_text = " ".join(
         [
@@ -577,6 +626,7 @@ def _build_student_profile(context: dict[str, Any] | None) -> dict[str, Any]:
         "summary_terms": summary_terms,
         "student_grade": grade,
         "student_school_level": school_level,
+        "student_gender": gender,
         "school_stage": student_stage,
         "student_eligibilities": student_eligibilities,
         "difficulty_text": difficulty_text,
@@ -709,6 +759,11 @@ def _passes_hard_filters(
         return False
 
     if not _has_required_eligibilities(metadata, profile):
+        return False
+
+    gender_restriction = metadata.get("_gender_restriction", "")
+    student_gender = profile.get("student_gender", "")
+    if gender_restriction and student_gender and gender_restriction != student_gender:
         return False
 
     age_eligible = _is_age_eligible_relaxed(metadata, profile) if relax_age else _is_age_eligible(metadata, profile)

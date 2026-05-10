@@ -1,4 +1,5 @@
 import re
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -19,13 +20,51 @@ def _parse_grade(value: Any) -> int:
     return int(match.group(0)) if match else 0
 
 
+def _normalize_school_level(value: Any) -> str:
+    return _join_value(value)
+
+
+def infer_birth_year_from_school_grade(
+    school_level: str,
+    grade: int,
+    reference_year: int | None = None,
+) -> int | None:
+    year = reference_year or date.today().year
+    level = _normalize_school_level(school_level)
+    grade_value = _parse_grade(grade)
+    if grade_value <= 0:
+        return None
+
+    if "초" in level:
+        total_grade = grade_value
+    elif "중" in level:
+        total_grade = grade_value + 6
+    elif "고" in level:
+        total_grade = grade_value + 9
+    else:
+        total_grade = grade_value
+
+    return year - (total_grade + 6)
+
+
+def estimate_age_from_school_grade(
+    school_level: str,
+    grade: int,
+    reference_year: int | None = None,
+) -> int | None:
+    birth_year = infer_birth_year_from_school_grade(school_level, grade, reference_year)
+    if birth_year is None:
+        return None
+    return (reference_year or date.today().year) - birth_year
+
+
 class StudentPersonalInfo(BaseModel):
-    student_name: str = Field(..., alias="학생이름")
+    student_name: str = Field("익명 학생", alias="학생이름")
     region: str = Field("", alias="지역")
     grade: int = Field(..., alias="학년")
     class_number: int = Field(0, alias="반")
     school_level: str = Field("", alias="학교급")
-    birth_date: str = Field(..., alias="생년월일")
+    birth_date: str = Field("", alias="생년월일")
     gender: str = Field(..., alias="성별")
 
     model_config = ConfigDict(extra="forbid")
@@ -75,7 +114,7 @@ class IntegratedApplicationInfo(BaseModel):
 
 
 class ObservationLog(BaseModel):
-    teacher_name: str = Field(..., alias="교사이름")
+    teacher_name: str = Field("", alias="교사이름")
     position: str = Field(..., alias="직위")
     date: str = Field(..., alias="날짜")
     time: str = Field(..., alias="시간")
@@ -125,7 +164,7 @@ class AnalyzeStudentRequest(BaseModel):
             "전체데이터": {
                 "통합신청서정보": {
                     "학생인적사항": {
-                        "학생이름": _join_value(student_info.get("성명")),
+                        "학생이름": _join_value(student_info.get("성명")) or "익명 학생",
                         "학년": _parse_grade(student_info.get("학년")),
                         "반": 0,
                         "지역": _join_value(student_info.get("거주지역")),

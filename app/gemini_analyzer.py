@@ -11,7 +11,12 @@ import certifi
 from pydantic import ValidationError
 
 from app.config import settings
-from app.models import AnalyzeStudentRequest, GeminiAnalysisResult
+from app.models import (
+    AnalyzeStudentRequest,
+    GeminiAnalysisResult,
+    estimate_age_from_school_grade,
+    infer_birth_year_from_school_grade,
+)
 
 SYSTEM_INSTRUCTION = (
     "너는 초/중/고등학교의 전문 상담 교사 겸 데이터 분석가야. "
@@ -230,12 +235,15 @@ def _extract_text_from_gemini_response(response_body: dict[str, Any]) -> str:
 
 
 def _normalize_gemini_payload(raw_payload: dict, fallback_name: str) -> dict:
-    name = (
-        raw_payload.get("이름")
-        or raw_payload.get("name")
-        or raw_payload.get("학생이름")
-        or fallback_name
-    )
+    if fallback_name == "익명 학생":
+        name = fallback_name
+    else:
+        name = (
+            raw_payload.get("이름")
+            or raw_payload.get("name")
+            or raw_payload.get("학생이름")
+            or fallback_name
+        )
     analysis = (
         raw_payload.get("분석내용")
         or raw_payload.get("요약분석")
@@ -283,6 +291,14 @@ def _build_compact_student_context(request_data: AnalyzeStudentRequest) -> str:
     info = request_data.all_data.integrated_application_info
     personal = info.student_personal_info
     difficulties = info.student_condition.student_difficulties
+    estimated_birth_year = infer_birth_year_from_school_grade(
+        personal.school_level,
+        personal.grade,
+    )
+    estimated_age = estimate_age_from_school_grade(
+        personal.school_level,
+        personal.grade,
+    )
 
     observation_lines: list[str] = []
     for log in request_data.all_data.observation_logs[:3]:
@@ -291,10 +307,11 @@ def _build_compact_student_context(request_data: AnalyzeStudentRequest) -> str:
         )
 
     return (
-        f"학생이름: {personal.student_name}\n"
         f"지역: {personal.region}\n"
         f"학교급: {personal.school_level}\n"
         f"학년/반: {personal.grade}학년 {personal.class_number}반\n"
+        f"추정출생연도: {estimated_birth_year or ''}\n"
+        f"추정나이: {estimated_age or ''}\n"
         f"가정환경: {info.home_environment_and_eligibility.student_basic_info}, "
         f"{info.home_environment_and_eligibility.family_status}\n"
         f"지원요청: {info.support_request}\n"
@@ -425,7 +442,7 @@ def analyze_student_data(request_data: AnalyzeStudentRequest) -> GeminiAnalysisR
         "아래 학생 데이터를 분석하고 반드시 JSON만 반환해.\n"
         "스키마:\n"
         "{\n"
-        '  "이름": "[학생이름]",\n'
+        '  "이름": "익명 학생",\n'
         '  "분석내용": "[분석 결과 텍스트]",\n'
         '  "핵심신호": ["키워드1", "키워드2", "키워드3"]\n'
         "}\n\n"

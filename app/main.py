@@ -5,7 +5,13 @@ from datetime import date, datetime
 
 from app.config import settings
 from app.gemini_analyzer import analyze_student_data, analyze_observation_domains
-from app.models import AnalysisSummary, AnalyzeStudentRequest, AnalyzeStudentResponse
+from app.models import (
+    AnalysisSummary,
+    AnalyzeStudentRequest,
+    AnalyzeStudentResponse,
+    estimate_age_from_school_grade,
+    infer_birth_year_from_school_grade,
+)
 from app.models import RecommendationItem
 from app.rag import search_relevant_institutions
 
@@ -39,6 +45,8 @@ def _parse_array_field(value: str) -> list[str]:
 
 
 def _calculate_age(birth_date: str) -> int | None:
+    if not birth_date:
+        return None
     try:
         parsed = datetime.strptime(birth_date, "%Y-%m-%d").date()
     except ValueError:
@@ -56,6 +64,14 @@ def _build_rag_context(
     personal = info.student_personal_info
     home = info.home_environment_and_eligibility
     difficulties = info.student_condition.student_difficulties
+    estimated_birth_year = infer_birth_year_from_school_grade(
+        personal.school_level,
+        personal.grade,
+    )
+    estimated_age = estimate_age_from_school_grade(
+        personal.school_level,
+        personal.grade,
+    )
 
     observation_texts = [
         f"{log.content} {log.special_notes}".strip()
@@ -65,6 +81,7 @@ def _build_rag_context(
     full_text_parts = [
         personal.region,
         personal.school_level,
+        personal.gender,
         analysis_summary,
         " ".join(key_signals),
         info.support_request,
@@ -84,9 +101,11 @@ def _build_rag_context(
     return {
         "student_grade": personal.grade,
         "student_school_level": personal.school_level,
+        "student_gender": personal.gender,
         "student_region": personal.region,
         "student_birth_date": personal.birth_date,
-        "student_age": _calculate_age(personal.birth_date),
+        "student_birth_year": estimated_birth_year,
+        "student_age": _calculate_age(personal.birth_date) or estimated_age,
         "student_text": " ".join(part for part in full_text_parts if part).strip(),
         "support_request": info.support_request,
         "application_reason": info.application_reason,
@@ -104,11 +123,22 @@ def _build_rag_context(
 def analyze_student(request: AnalyzeStudentRequest) -> AnalyzeStudentResponse:
     try:
         analysis = analyze_student_data(request)
+        personal = request.all_data.integrated_application_info.student_personal_info
+        estimated_birth_year = infer_birth_year_from_school_grade(
+            personal.school_level,
+            personal.grade,
+        )
+        estimated_age = estimate_age_from_school_grade(
+            personal.school_level,
+            personal.grade,
+        )
         student_context = (
-            f"지역: {request.all_data.integrated_application_info.student_personal_info.region}\n"
-            f"학교급: {request.all_data.integrated_application_info.student_personal_info.school_level}\n"
-            f"생년월일: {request.all_data.integrated_application_info.student_personal_info.birth_date}\n"
-            f"학년: {request.all_data.integrated_application_info.student_personal_info.grade}\n"
+            f"지역: {personal.region}\n"
+            f"학교급: {personal.school_level}\n"
+            f"성별: {personal.gender}\n"
+            f"추정출생연도: {estimated_birth_year or ''}\n"
+            f"추정나이: {estimated_age or ''}\n"
+            f"학년: {personal.grade}\n"
             f"지원요청: {request.all_data.integrated_application_info.support_request}\n"
             f"핵심신호: {', '.join(analysis.key_signals)}"
         )
